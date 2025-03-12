@@ -1,0 +1,4 @@
+# Technology
+
+- PostgreSQL
+- Python 
