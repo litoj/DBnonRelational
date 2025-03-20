@@ -26,7 +26,8 @@ try:
     cursor.execute("SELECT version();")
     print(cursor.fetchone())
 except (Exception, psycopg2.Error) as error:
-    print("Error while connecting to PostgreSQL", error)
+    print("Error while connecting to PostgreSQL")
+    raise error
 
 # %%
 # Tabellen löschen
