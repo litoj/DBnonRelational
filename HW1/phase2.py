@@ -16,7 +16,7 @@ cursor = phase1.cursor
 # In[3]:
 
 
-def h2v(cursor, h_table_name, v_table_name):
+def h2v(cursor, h_table_name, v_table_name, indexing=False):
     cursor.execute(f"DROP TABLE IF EXISTS {v_table_name} CASCADE;")
     cursor.execute(f"DROP VIEW IF EXISTS {v_table_name}_column_type CASCADE;")
     cursor.execute(
@@ -58,10 +58,18 @@ def h2v(cursor, h_table_name, v_table_name):
     """
     )
 
+    if indexing:
+        cursor.execute(
+            f"CREATE INDEX IF NOT EXISTS idx_{v_table_name}_oid ON {v_table_name}(oid);"
+        )
+        cursor.execute(
+            f"CREATE INDEX IF NOT EXISTS idx_{v_table_name}_key ON {v_table_name}(key);"
+        )
+
     cursor.execute(
         f"""
         CREATE VIEW {v_table_name}_column_type AS
-        SELECT column_name AS key, data_type as value FROM information_schema.columns
+        SELECT column_name AS key, data_type AS value FROM information_schema.columns
         WHERE table_name = '{h_table_name}' AND column_name != 'oid'
     """
     )
@@ -180,25 +188,32 @@ def bench_table(
     num_attributes,
     num_queries=1000,
     oid_test_preference=0.5,
+    max_time=5,
 ):
     start_time = time.perf_counter()
-    for _ in range(num_queries):
-        # if random.random() < oid_test_preference:
-        cursor.execute(
-            f"SELECT * FROM {table_name} WHERE oid = {random.randint(1, num_tuples)}"
-        )
-        # else:
-        i = random.randint(1, num_attributes)
-        if i % 2 == 0:
+    end_time = time.perf_counter()
+    measure_loss = end_time - start_time
+    i = 0
+    while i < num_queries:
+        i += 1
+        if random.random() < oid_test_preference:
             cursor.execute(
-                f"SELECT * FROM {table_name} WHERE a{i} = {random.randint(1, phase1.allowed_integer)}"
+                f"SELECT * FROM {table_name} WHERE oid = {random.randint(1, num_tuples)}"
             )
         else:
-            cursor.execute(
-                f"SELECT * FROM {table_name} WHERE a{i} = '{random.choice(phase1.allowed_strings)}'"
-            )
-    end_time = time.perf_counter()
-    return num_queries / (end_time - start_time)
+            i = random.randint(1, num_attributes)
+            if i % 2 == 0:
+                cursor.execute(
+                    f"SELECT * FROM {table_name} WHERE a{i} = {random.randint(1, phase1.allowed_integer)}"
+                )
+            else:
+                cursor.execute(
+                    f"SELECT * FROM {table_name} WHERE a{i} = '{random.choice(phase1.allowed_strings)}'"
+                )
+        end_time = time.perf_counter()
+        if end_time - start_time > max_time:
+            break
+    return i / (end_time - start_time - i * measure_loss)
 
 
 def bench_compare(
@@ -206,16 +221,25 @@ def bench_compare(
     num_tuples,
     sparsity,
     num_attributes,
+    indexing=False,
+    # partition?
     num_queries=1000,
     oid_test_preference=0.5,
+    max_time=5,
 ):
     phase1.generate_table(cursor, "h", num_tuples, sparsity, num_attributes)
-    h2v(cursor, "h", "v")
+    h2v(cursor, "h", "v", indexing)
     v2h(cursor, "v", "h_view")
 
     return {
         "h": bench_table(
-            cursor, "h", num_tuples, num_attributes, num_queries, oid_test_preference
+            cursor,
+            "h",
+            num_tuples,
+            num_attributes,
+            num_queries,
+            oid_test_preference,
+            max_time,
         ),
         "v": bench_table(
             cursor,
@@ -224,55 +248,83 @@ def bench_compare(
             num_attributes,
             num_queries,
             oid_test_preference,
+            max_time,
         ),
     }
 
 
+def normalized_diff(a, b):
+    return floor((a - b) * 10000 / (a + b)) / 100
+
+
 def benchmark(
-    t_range=range(20, 32, 4),  # base sqrt(2)
+    t_range=range(10, 16, 2),  # base sqrt(2)
     s_range=range(2, 8, 4),  # base 0.5
     a_range=range(5, 9, 4),
-    num_queries=1000,
+    num_queries=10,
     oid_test_preference=0.5,
+    max_time=10,
 ):
     results = []
 
-    for tuple_factor in t_range:
-        for sparsity_factor in s_range:
-            for num_attributes in a_range:
-                t = floor(sqrt(2) ** tuple_factor)
-                s = 1 - 0.5**sparsity_factor
+    for indexing in False, True:
+        for tuple_factor in t_range:
+            for sparsity_factor in s_range:
+                for num_attributes in a_range:
+                    t = floor(2**tuple_factor)
+                    s = 1 - 0.5**sparsity_factor
 
-                result = bench_compare(
-                    cursor, t, s, num_attributes, num_queries, oid_test_preference
-                )
+                    result = bench_compare(
+                        cursor,
+                        t,
+                        s,
+                        num_attributes,
+                        indexing,
+                        num_queries,
+                        oid_test_preference,
+                        max_time,
+                    )
+                    cursor.execute("SELECT pg_total_relation_size('h')")
+                    memory_h = cursor.fetchall()[0][0]
+                    cursor.execute("SELECT pg_total_relation_size('v')")
+                    memory_v = cursor.fetchall()[0][0]
 
-                results.append(
-                    {
-                        "tf": tuple_factor,
-                        "sf": sparsity_factor,
-                        "a": num_attributes,
-                        "p_h": floor(result["h"]),
-                        "h_v": floor(result["v"]),
-                        "rdf": (result["h"] - result["v"]) ** 2
-                        // (result["h"] + result["v"]),
-                    }
-                )
-                print(f"rating diff: {results[-1]["rdf"]}")
+                    results.append(
+                        {
+                            "tf": tuple_factor,
+                            "t": t,
+                            "sf": sparsity_factor,
+                            "s": s,
+                            "a": num_attributes,
+                            "i": indexing,
+                            "p_h": floor(result["h"]),
+                            "p_v": floor(result["v"]),
+                            "m_h": memory_h,
+                            "m_v": memory_v,
+                            "pdf": normalized_diff(result["h"], result["v"]),
+                            "mdf": normalized_diff(memory_h, memory_v),
+                        }
+                    )
+                    print(
+                        f"mem_rating_diff: {results[-1]["mdf"]}; perf_rating_diff: {results[-1]["pdf"]}"
+                    )
 
-    sorted_results = sorted(results, key=lambda x: x["rdf"])
-    print("Results:")
-    for r in sorted_results:
-        print(
-            f"tf={r['tf']}, sf={r['sf']}, a={r['a']}, rdf={r['rdf']}, diff={r['p_h']-r['h_v']}"
-        )
+    perf_results = sorted(results, key=lambda x: x["pdf"])
+    mem_results = sorted(list(results), key=lambda x: x["mdf"])
+    print("Performance Results:")
+    for r in perf_results:
+        print(r)
+    print("Memory Results:")
+    for r in mem_results:
+        print(r)
 
 
 phase1.allowed_strings = ["a", "b", "c", "d", "e"]
 benchmark(
-    t_range=range(20, 33, 2),
-    s_range=range(2, 20, 2),
-    a_range=range(5, 6, 8),
+    # t_range=range(10, 16, 1),
+    s_range=range(4, 20, 2),
+    a_range=range(5, 11, 4),
     num_queries=10,
     oid_test_preference=0.5,
+    max_time=10,
 )
