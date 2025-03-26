@@ -7,6 +7,7 @@ from math import log, sqrt, floor
 import time
 import random
 import phase1
+import string
 
 # In[2]:
 
@@ -17,115 +18,98 @@ cursor = phase1.cursor
 
 
 def h2v(cursor, h_table_name, v_table_name, indexing=False):
-    cursor.execute(f"DROP TABLE IF EXISTS {v_table_name} CASCADE;")
-    cursor.execute(f"DROP VIEW IF EXISTS {v_table_name}_column_type CASCADE;")
+    for suffix in "str", "int", "null", "col":
+        cursor.execute(f"DROP TABLE IF EXISTS {v_table_name}_{suffix} CASCADE;")
     cursor.execute(
         f"""
-        CREATE TABLE {v_table_name} (
-            oid INTEGER,
-            key VARCHAR(50),
-            value VARCHAR(50)
-        );
+        CREATE TABLE {v_table_name}_str (oid INTEGER, key VARCHAR(50), value VARCHAR(50));
+        CREATE TABLE {v_table_name}_int (oid INTEGER, key VARCHAR(50), value INTEGER);
+        CREATE TABLE {v_table_name}_null (oid INTEGER);
+        CREATE TABLE {v_table_name}_col (column_name VARCHAR(50), data_type CHAR(3));
     """
     )
 
     cursor.execute(
         f"""
-        SELECT column_name
+        INSERT INTO {v_table_name}_col
+        SELECT
+            column_name,
+            CASE WHEN data_type = 'integer' THEN 'int' ELSE 'str' END
         FROM information_schema.columns
-        WHERE table_name = '{h_table_name}' AND column_name != 'oid';
-    """
-    )
-
-    columns = cursor.fetchall()
-
-    for [column] in columns:
-        cursor.execute(
-            f"""
-            INSERT INTO {v_table_name} (oid, key, value)
-            SELECT oid, '{column}', {column}
-            FROM {h_table_name}
-            WHERE {column} IS NOT NULL
-        """
-        )
-
-    # add '_'='' for all rows without a single value
-    cursor.execute(
-        f"""
-        INSERT INTO {v_table_name} (oid, key, value)
-        SELECT oid, '_', '' FROM {h_table_name}
-        WHERE oid NOT IN (SELECT DISTINCT oid FROM {v_table_name})
-    """
-    )
-
-    if indexing:
-        cursor.execute(
-            f"CREATE INDEX IF NOT EXISTS idx_{v_table_name}_oid ON {v_table_name}(oid);"
-        )
-        cursor.execute(
-            f"CREATE INDEX IF NOT EXISTS idx_{v_table_name}_key ON {v_table_name}(key);"
-        )
-
-    cursor.execute(
-        f"""
-        CREATE VIEW {v_table_name}_column_type AS
-        SELECT column_name AS key, data_type AS value FROM information_schema.columns
         WHERE table_name = '{h_table_name}' AND column_name != 'oid'
     """
     )
+
+    cursor.execute(f"SELECT * FROM {v_table_name}_col")
+
+    columns = cursor.fetchall()
+
+    for [column, data_type] in columns:
+        if data_type != "int":
+            cursor.execute(
+                f"""
+                INSERT INTO {v_table_name}_str (oid, key, value)
+                SELECT oid, '{column}', {column}
+                FROM {h_table_name}
+                WHERE {column} IS NOT NULL
+            """
+            )
+        else:
+            cursor.execute(
+                f"""
+                INSERT INTO {v_table_name}_int (oid, key, value)
+                SELECT oid, '{column}', {column}
+                FROM {h_table_name}
+                WHERE {column} IS NOT NULL
+            """
+            )
+
+    cursor.execute(
+        f"""
+        INSERT INTO {v_table_name}_null (oid)
+        SELECT oid FROM {h_table_name}
+        WHERE oid NOT IN (
+            SELECT DISTINCT oid FROM {v_table_name}_int
+            FULL OUTER JOIN {v_table_name}_str USING (oid)
+        )"""
+    )
+
+    if indexing:
+        for suffix in "str", "int", "null":
+            cursor.execute(
+                f"CREATE INDEX IF NOT EXISTS idx_{v_table_name}_oid ON {v_table_name}_{suffix}(oid);"
+            )
+        for suffix in "str", "int":
+            cursor.execute(
+                f"CREATE INDEX IF NOT EXISTS idx_{v_table_name}_key ON {v_table_name}_{suffix}(key);"
+            )
+
     conn.commit()
 
 
-def v2h(cursor, v_table_name, h_view_name, sacrifice="memory"):
-    try:
-        cursor.execute(f"DROP VIEW IF EXISTS {h_view_name}")
-    except:
-        conn.commit()
-        cursor.execute(f"DROP TABLE IF EXISTS {h_view_name}")
+def v2h(cursor, v_table_name, h_view_name):
+    cursor.execute(f"DROP VIEW IF EXISTS {h_view_name}")
 
-    cursor.execute(f"SELECT key, value FROM {v_table_name}_column_type")
-    columns = cursor.fetchall()
-    col_type = {c: d for c, d in columns}
-    columns = [(f"a{i}", col_type[f"a{i}"]) for i in range(1, len(columns) + 1)]
+    cursor.execute(f"SELECT column_name, data_type FROM {v_table_name}_col")
+    typed_cols = cursor.fetchall()
+    typed_cols = sorted(typed_cols, key=lambda x: x[0])
 
-    if sacrifice == "memory":  # approach1: create everything at once - memory heavy
-        select_statements = ",\n ".join([f"v{c}.value::{d} AS {c}" for c, d in columns])
-        join_statement = "\n ".join(
-            f"LEFT JOIN {v_table_name} AS v{c} ON b.oid = v{c}.oid AND v{c}.key = '{c}'"
-            for c, _ in columns
-        )
-        cursor.execute(
-            f"""
-            CREATE VIEW {h_view_name} AS
-            SELECT b.oid, {select_statements}
-            FROM (SELECT DISTINCT oid FROM {v_table_name}) AS b
-            {join_statement}
-            ORDER BY b.oid ASC;
-        """
-        )
-    else:  # approach2: cpu and disk intensive - iteratively populate columns
-        cursor.execute(
-            f"""
-            CREATE TABLE {h_view_name} (
-                oid SERIAL PRIMARY KEY,
-                {",\n".join([f"{key} {value}" for key, value in columns])}
-            );
-        """
-        )
-        cursor.execute(
-            f"INSERT INTO {h_view_name} (oid) SELECT DISTINCT oid FROM {v_table_name} ORDER BY oid ASC;"
-        )
-        conn.commit()  # without partial commits the transaction never ends
-        for column, data_type in columns:
-            cursor.execute(
-                f"""
-                UPDATE {h_view_name} dst
-                SET {column} = v.value
-                FROM (SELECT oid, value::{data_type} FROM {v_table_name} WHERE key = '{column}') AS v
-                WHERE dst.oid = v.oid;
-            """
-            )
-            conn.commit()
+    cursor.execute(  # how do we not loose the empty column?
+        f"""
+        CREATE VIEW {h_view_name} AS
+        SELECT b.oid, {
+            ", ".join([f"v{c}.value AS {c}" for c,_ in typed_cols])
+        } FROM (
+            (SELECT oid FROM {v_table_name}_str)
+            UNION
+            (SELECT oid FROM {v_table_name}_int)
+            UNION ALL -- null rows are not stored in other tables -> still unique
+            (SELECT oid FROM {v_table_name}_null)
+        ) AS b {"\n".join(
+            f"LEFT JOIN {v_table_name}_{t} AS v{c} ON b.oid = v{c}.oid AND v{c}.key = '{c}'"
+            for c,t in typed_cols
+        )}"""
+    )
 
     conn.commit()
 
@@ -137,6 +121,8 @@ def test_identity(cursor, table1, table2):
     # update changes order so there is also no other way
     cursor.execute(f"SELECT * FROM {table2} ORDER BY oid")
     rows2 = cursor.fetchall()
+    print(len(rows1), len(rows2))
+    assert len(rows1) == len(rows2)
     for r1, r2 in zip(rows1, rows2):
         if r1 != r2:
             print(f"Different rows:\n{r1}\n{r2}")
@@ -146,14 +132,14 @@ def test_identity(cursor, table1, table2):
 def test_transform_randomized(cursor):
     phase1.generate_randomized("h", value_preview=-1)
     h2v(cursor, "h", "v")
-    phase1.print_table(cursor, "v")
+    phase1.print_table(cursor, "v_str")
     v2h(cursor, "v", "h_view")
     phase1.print_table(cursor, "h_view")
 
 
-def test_transform(cursor, size=5, sacrifice="memory"):
+def test_transform_identity(cursor, size=3):
     num_tuples = size
-    num_attributes = size - 1
+    num_attributes = size
     sparsity = 0.5
     table_name = "h"
     phase1.create_table(cursor, table_name, num_attributes)
@@ -162,23 +148,41 @@ def test_transform(cursor, size=5, sacrifice="memory"):
     for r in range(1, num_tuples + 1):
         values = []
         for i in range(1, num_attributes + 1):
-            values.append(phase1.generate_column_value(1 if i < r else 0, i, str_pool))
+            values.append(phase1.generate_column_value(1 if i <= r else 0, i, str_pool))
         insert_query = f"INSERT INTO {table_name} (oid, {', '.join([f'a{i}' for i in range(1, num_attributes + 1)] )}) VALUES ({r}, {', '.join(values)});"
         cursor.execute(insert_query)
 
     conn.commit()
-    # phase1.print_table(cursor, table_name)
+    phase1.print_table(cursor, table_name)
 
     h2v(cursor, table_name, "v")
-    # phase1.print_table(cursor, "v_transform")
+    phase1.print_table(cursor, "v_str")
 
-    v2h(cursor, "v", "h_view", sacrifice)
-    # phase1.print_table(cursor, "h_transform")
+    v2h(cursor, "v", "h_view")
+    phase1.print_table(cursor, "h_view")
 
     test_identity(cursor, table_name, "h_view")
 
 
-# test_transform(cursor, 100, "cpu")
+test_transform_identity(cursor)
+
+
+def bench_oid(cursor, table_name, num_tuples):
+    cursor.execute(
+        f"SELECT * FROM {table_name} WHERE oid = {random.randint(1, num_tuples)}"
+    )
+
+
+def bench_vals(cursor, table_name, num_attributes):
+    i = random.randint(1, num_attributes)
+    if i % 2 == 0:
+        cursor.execute(
+            f"SELECT * FROM {table_name} WHERE a{i} = {random.randint(1, phase1.allowed_integer)}"
+        )
+    else:
+        cursor.execute(
+            f"SELECT * FROM {table_name} WHERE a{i} = '{random.choice(phase1.allowed_strings)}'"
+        )
 
 
 def bench_table(
@@ -191,28 +195,27 @@ def bench_table(
     max_time=5,
 ):
     start_time = time.perf_counter()
+    i = 0
     end_time = time.perf_counter()
     measure_loss = end_time - start_time
-    i = 0
-    while i < num_queries:
-        i += 1
-        if random.random() < oid_test_preference:
-            cursor.execute(
-                f"SELECT * FROM {table_name} WHERE oid = {random.randint(1, num_tuples)}"
-            )
-        else:
-            i = random.randint(1, num_attributes)
-            if i % 2 == 0:
-                cursor.execute(
-                    f"SELECT * FROM {table_name} WHERE a{i} = {random.randint(1, phase1.allowed_integer)}"
-                )
+    if oid_test_preference < 0:  # to ensure both tests are run at least once
+        while i < num_queries:
+            i += 2
+            bench_oid(cursor, table_name, num_tuples)
+            bench_vals(cursor, table_name, num_attributes)
+            end_time = time.perf_counter()
+            if end_time - start_time > max_time:
+                break
+    else:
+        while i < num_queries:
+            i += 1
+            if random.random() < oid_test_preference:
+                bench_oid(cursor, table_name, num_tuples)
             else:
-                cursor.execute(
-                    f"SELECT * FROM {table_name} WHERE a{i} = '{random.choice(phase1.allowed_strings)}'"
-                )
-        end_time = time.perf_counter()
-        if end_time - start_time > max_time:
-            break
+                bench_vals(cursor, table_name, num_attributes)
+            end_time = time.perf_counter()
+            if end_time - start_time > max_time:
+                break
     return i / (end_time - start_time - i * measure_loss)
 
 
@@ -222,7 +225,6 @@ def bench_compare(
     sparsity,
     num_attributes,
     indexing=False,
-    # partition?
     num_queries=1000,
     oid_test_preference=0.5,
     max_time=5,
@@ -258,7 +260,7 @@ def normalized_diff(a, b):
 
 
 def benchmark(
-    t_range=range(10, 16, 2),  # base sqrt(2)
+    t_range=range(10, 16, 2),  # base 2
     s_range=range(2, 8, 4),  # base 0.5
     a_range=range(5, 9, 4),
     num_queries=10,
@@ -286,7 +288,11 @@ def benchmark(
                     )
                     cursor.execute("SELECT pg_total_relation_size('h')")
                     memory_h = cursor.fetchall()[0][0]
-                    cursor.execute("SELECT pg_total_relation_size('v')")
+                    cursor.execute(
+                        f"SELECT {' + '.join(
+                            [f"pg_total_relation_size('v_{s}')" for s in ('str','int','null')]
+                        )}"
+                    )
                     memory_v = cursor.fetchall()[0][0]
 
                     results.append(
@@ -310,21 +316,22 @@ def benchmark(
                     )
 
     perf_results = sorted(results, key=lambda x: x["pdf"])
-    mem_results = sorted(list(results), key=lambda x: x["mdf"])
     print("Performance Results:")
     for r in perf_results:
         print(r)
+
+    mem_results = sorted(results, key=lambda x: x["mdf"])
     print("Memory Results:")
     for r in mem_results:
         print(r)
 
 
-phase1.allowed_strings = ["a", "b", "c", "d", "e"]
-benchmark(
-    # t_range=range(10, 16, 1),
-    s_range=range(4, 20, 2),
-    a_range=range(5, 11, 4),
-    num_queries=10,
-    oid_test_preference=0.5,
-    max_time=10,
-)
+# phase1.allowed_strings = ['a', 'b', 'c', 'd', 'e']
+# benchmark(
+#     # t_range=range(10, 16, 1),
+#     s_range=range(2, 20, 3),
+#     a_range=range(5, 11, 4),
+#     num_queries=10,
+#     oid_test_preference=0.5,
+#     max_time=10,
+# )
