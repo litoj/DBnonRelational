@@ -7,7 +7,7 @@ from math import log, sqrt, floor
 import time
 import random
 import phase1
-import string
+import json
 
 # In[2]:
 
@@ -267,6 +267,7 @@ def benchmark(
     oid_test_preference=0.5,
     max_time=10,
 ):
+    start_time = time.perf_counter()
     results = []
 
     for indexing in False, True:
@@ -315,23 +316,22 @@ def benchmark(
                         f"mem_rating_diff: {results[-1]["mdf"]}; perf_rating_diff: {results[-1]["pdf"]}"
                     )
 
-    perf_results = sorted(results, key=lambda x: x["pdf"])
-    print("Performance Results:")
-    for r in perf_results:
-        print(r)
+    with open("results.json", "w") as file:
+        perf_results = sorted(results, key=lambda x: x["pdf"])
+        mem_results = sorted(results, key=lambda x: x["mdf"])
+        json.dump({"perf": perf_results, "mem": mem_results}, file, indent=4)
 
-    mem_results = sorted(results, key=lambda x: x["mdf"])
-    print("Memory Results:")
-    for r in mem_results:
-        print(r)
+    print(
+        f"Results saved to results.json in {time.perf_counter() - start_time}s, used {time.process_time()} CPU seconds"
+    )
 
 
 # phase1.allowed_strings = ['a', 'b', 'c', 'd', 'e']
-# benchmark(
-#     # t_range=range(10, 16, 1),
-#     s_range=range(2, 20, 3),
-#     a_range=range(5, 11, 4),
-#     num_queries=10,
-#     oid_test_preference=0.5,
-#     max_time=10,
-# )
+benchmark(
+    t_range=range(10, 17, 2),
+    s_range=range(2, 22, 3),
+    a_range=range(5, 11, 4),
+    num_queries=100,
+    oid_test_preference=0.5,
+    max_time=100,
+)
