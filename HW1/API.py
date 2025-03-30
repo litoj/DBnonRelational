@@ -114,7 +114,7 @@ def benchmark_api(cursor, num_queries=1000):
             oid = random.randint(1, 10000)
             cursor.execute("SELECT * FROM q_i(%s);", (oid,))
         else:
-            attr_num = random.randint(1, 20)  # Angenommene maximale Attributanzahl
+            attr_num = random.randint(1, 20) 
             if attr_num % 2 == 0:
                 attr_val = random.randint(1, 100)
                 cursor.execute(
@@ -132,7 +132,6 @@ def benchmark_api(cursor, num_queries=1000):
 
 
 def compare_query_plans(cursor):
-    """Vergleicht die Anfragepläne der verschiedenen Implementierungen"""
     print("\nVergleich der Anfragepläne:")
 
     # Beispiel-OID für Vergleich
@@ -176,8 +175,7 @@ def apply_final_optimizations(cursor):
         """
         )
 
-        # 2. Materialisierte Sicht für häufig abgefragte Attribute
-        print("Optimierung 2: Materialisierte Sicht für häufige Abfragen")
+        print("Optimierung 2: Materialisierte Sicht")
         cursor.execute(
             """
         CREATE MATERIALIZED VIEW v_frequent_attrs AS
@@ -197,11 +195,10 @@ def apply_final_optimizations(cursor):
 
 
 def run_extended_benchmark(cursor):
-    """Führt den erweiterten Benchmark mit allen Varianten durch"""
     results = []
 
     # Testkonfigurationen
-    configs = [(1000, 0.5, 5), (5000, 0.75, 10), (10000, 0.9, 20)]
+    configs = [(1000, 0.75, 5), (5000, 0.75, 5), (10000, 0.75, 5)]
 
     for config in configs:
         print(f"\nBenchmark für Konfiguration: {config}")
@@ -215,7 +212,7 @@ def run_extended_benchmark(cursor):
 
         # API-Funktionen erstellen
         create_query_i_function(cursor)
-        create_query_ii_functions(cursor, config[2])
+        create_query_ii_functions(cursor)
 
         # Phase 3 API
         api_time = benchmark_api(cursor, 1000)
@@ -238,7 +235,7 @@ def run_extended_benchmark(cursor):
 
 
 def visualize_results(df):
-    """Visualisiert die Benchmark-Ergebnisse"""
+    print('fuck')
     fig, axes = plt.subplots(1, 2, figsize=(15, 5))
 
     # Performance-Vergleich
@@ -301,6 +298,9 @@ print(f"API benötigte {api_time:.2f} Sekunden für 1000 Abfragen")
 # 6. Finale Optimierungen anwenden
 apply_final_optimizations(cursor)
 
+visualize_results(
+    run_extended_benchmark(cursor)
+)
 
 cursor.close()
 conn.close()

@@ -24,7 +24,7 @@ except Exception as e:
 def generate(num_tuples, sparsity, num_attributes):
     try:
         # Alte Tabelle löschen, falls vorhanden
-        cursor.execute("DROP TABLE IF EXISTS H;")
+        cursor.execute("DROP TABLE IF EXISTS H CASCADE;")
 
         # Tabelle H erstellen
         columns = ["oid SERIAL PRIMARY KEY"]
