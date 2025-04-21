@@ -5,15 +5,6 @@ import psycopg2
 import random
 
 
-def print_table(cursor, table_name, max_rows=10):
-    cursor.execute(f"SELECT * FROM {table_name} ORDER BY i, j")
-    rows = cursor.fetchall()
-    print(f"Table {table_name}")
-    for row in rows[:max_rows]:
-        print(row)
-    print()
-
-
 try:
     conn = psycopg2.connect(
         dbname="matmul", user="postgres", password="", host="localhost", port="5432"
@@ -38,7 +29,7 @@ def create_table(table_name):
             j INTEGER NOT NULL,
             val INTEGER NOT NULL
         );
-        CREATE INDEX idx_pos ON {table_name}(i, j);
+        CREATE INDEX idx_{table_name}_pos ON {table_name}(i, j);
     """
     )
 
@@ -48,7 +39,7 @@ def get_mat_size(table_name):
     return cursor.fetchone()
 
 
-def generate(table_name, width, height, zeros_ratio):
+def generate_table(table_name, width, height, zeros_ratio):
     try:
         create_table(table_name)
 
@@ -72,30 +63,24 @@ def generate(table_name, width, height, zeros_ratio):
         print("Fehler in generate():", error)
 
 
+def generate(base_name="rnd", size=10, sparsity=0.5):
+    generate_table(f"{base_name}_h", size + 1, size, sparsity)
+    generate_table(f"{base_name}_v", size, size + 1, sparsity)
+
+
 def sparsity_check(table_name):
     [width, height] = get_mat_size(table_name)
     cursor.execute(f"SELECT COUNT(*) FROM {table_name}")
     value_count = cursor.fetchone()[0]
 
     cursor.execute(f"SELECT val FROM {table_name} WHERE i={width} AND j={height}")
-    size_anchor_value = cursor.fetchone()[0]
+    size_anchor_value = cursor.fetchone()
 
-    if size_anchor_value == 0:
+    if size_anchor_value and size_anchor_value[0] == 0:
         value_count -= 1
     return 1 - (value_count / (width * height))
 
 
-def generate_randomized(
-    table_name="rnd", width_limit=50, height_limit=50, value_preview=0
-):
-    width = random.randint(1, width_limit + 1)
-    height = random.randint(1, height_limit + 1)
-    sparsity = random.random()
-    generate(table_name, width, height, sparsity)
-    if value_preview != 0:
-        print_table(cursor, table_name, max_rows=value_preview)
-    return sparsity
-
-
-generate_randomized()
-print(sparsity_check("rnd"))
+generate("rnd", 5, 0.5)
+print(sparsity_check("rnd_h"))
+print(sparsity_check("rnd_v"))
