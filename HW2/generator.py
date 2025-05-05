@@ -81,6 +81,9 @@ def sparsity_check(table_name):
     return 1 - (value_count / (width * height))
 
 
-generate("rnd", 5, 0.5)
-print(sparsity_check("rnd_h"))
-print(sparsity_check("rnd_v"))
+if __name__ == "__main__":
+    # Example usage
+    generate("rnd", 5, 0.5)
+    print(sparsity_check("rnd_h"))
+    print(sparsity_check("rnd_v"))
+

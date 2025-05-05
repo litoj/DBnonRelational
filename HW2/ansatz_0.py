@@ -38,8 +38,6 @@ def client_side_matmul(A_name, B_name, C_name):
     # fill zeros in A and B
     A = fill_zeros(A, a_rows, a_cols)
     B = fill_zeros(B, b_rows, b_cols)
-    #B = fill_zeros(B, b_rows, b_cols)
-    # Initialize result matrix
     C = {}
 
     # Perform multiplication
@@ -67,7 +65,7 @@ if __name__ == "__main__":
     try:
 
         # Test with toy example
-        client_side_matmul("A_toy", "B_toy", "C_toy_client")
+        client_side_matmul("A_toy", "B_toy", "C_client_toy")
 
         # Test with random matrices
         generate("rnd", 5, 0.5)  # Generate random 5x6 and 6x5 matrices
