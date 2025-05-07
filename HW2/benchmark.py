@@ -5,7 +5,7 @@ import ansatz_0, ansatz_1, ansatz_2
 # Benchmark parameters
 MATRIX_SIZES = [8, 16, 32, 64, 128, 256]
 SPARSITIES = [0.1, 0.3, 0.5, 0.7, 0.9]
-REPETITIONS = 5
+REPETITIONS = 40
 
 results = []
 
@@ -25,11 +25,10 @@ for size in MATRIX_SIZES:
             res_tbl = f"result_{approach.__name__}"
 
             start, A, B = time.perf_counter(), None, None
+            create_table(res_tbl)
             if approach.__name__ == "ansatz_0":
                 A = approach.get_data(h_tbl)
                 B = approach.get_data(v_tbl)
-            elif approach.__name__ == "ansatz_1":
-                create_table(res_tbl)
             elif approach.__name__ == "ansatz_2":
                 approach.convert_to_vector(
                     h_tbl,
@@ -39,8 +38,6 @@ for size in MATRIX_SIZES:
                     v_tbl,
                     "col",
                 )
-                create_table(res_tbl)
-
             overhead = time.perf_counter() - start
 
             for _ in range(REPETITIONS):
@@ -65,13 +62,13 @@ for size in MATRIX_SIZES:
                     )
                 times.append(time.perf_counter() - start)
 
-            median_time = sorted(times)[len(times) // 2]
+            avg_time = sum(times) / len(times)
             results.append(
                 {
                     "size": size,
                     "sparsity": sparsity,
                     "approach": approach.__name__,
-                    "time": median_time,
+                    "time": avg_time,
                     "overhead": overhead,
                 }
             )
@@ -79,6 +76,7 @@ for size in MATRIX_SIZES:
 # Save results to CSV
 import csv
 
+# print(results)
 with open("benchmark_results.csv", "w") as f:
     writer = csv.DictWriter(
         f, fieldnames=["size", "sparsity", "approach", "time", "overhead"]

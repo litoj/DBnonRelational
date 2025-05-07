@@ -6,28 +6,15 @@ from generator import *
 def sql_side_matmul(A_name, B_name, C_name):
     """Perform matrix multiplication on the SQL side using sparse representation"""
     try:
-        # Execute the sparse matrix multiplication query
-        # cursor.execute(
-        #     f"""
-        #     SELECT A.i, B.j, SUM(A.val * B.val) AS val
-        #     FROM {A_name} A, {B_name} B
-        #     WHERE A.j = B.i
-        #     GROUP BY A.i, B.j
-        #     ORDER BY A.i, B.j
-        # """
-        # )
 
-        # Store results in C
+        # Store results in table C
         cursor.execute(
             f"""
             INSERT INTO {C_name} (i, j, val)
-            SELECT i, j, val
-            FROM (
-                SELECT A.i, B.j, SUM(A.val * B.val) AS val
-                FROM {A_name} A, {B_name} B
-                WHERE A.j = B.i
-                GROUP BY A.i, B.j
-            ) AS result;
+            SELECT A.i, B.j, SUM(A.val * B.val) AS val
+            FROM {A_name} A, {B_name} B
+            WHERE A.j = B.i
+            GROUP BY A.i, B.j;
         """
         )
         conn.commit()
