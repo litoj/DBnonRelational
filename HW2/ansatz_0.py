@@ -14,6 +14,7 @@ def fill_zeros(matrix, rows, cols):
                 matrix[i][j] = 0
     return matrix
 
+
 def fetch_matrix(table_name):
     """Fetch a matrix from the database and return it as a dictionary"""
     cursor.execute(f"SELECT i, j, val FROM {table_name} ORDER BY i, j")
@@ -26,18 +27,24 @@ def fetch_matrix(table_name):
     return matrix
 
 
-def client_side_matmul(A_name, B_name, C_name):
+def get_data(tbl_name) -> dict:
+    values = fetch_matrix(tbl_name)
+    rows, cols = get_mat_size(tbl_name)
+    return {
+        "name": tbl_name,
+        "rows": rows,
+        "cols": cols,
+        "values": fill_zeros(values, rows, cols),
+    }
+
+
+# A: {rows, cols, values}; B: -||-
+def client_side_matmul(A_data: dict, B_data: dict, C_name):
     """Perform matrix multiplication on the client side"""
     # Fetch matrices from database
-    A = fetch_matrix(A_name)
-    B = fetch_matrix(B_name)
+    A, a_rows, a_cols = A_data["values"], A_data["rows"], A_data["cols"]
+    B, b_cols = B_data["values"], B_data["cols"]
 
-    a_rows, a_cols = get_mat_size(A_name)
-    b_rows, b_cols = get_mat_size(B_name)
-    
-    # fill zeros in A and B
-    A = fill_zeros(A, a_rows, a_cols)
-    B = fill_zeros(B, b_rows, b_cols)
     C = {}
 
     # Perform multiplication
@@ -59,17 +66,18 @@ def client_side_matmul(A_name, B_name, C_name):
         for j in C[i]:
             cursor.execute(f"INSERT INTO {C_name} VALUES ({i}, {j}, {C[i][j]})")
     conn.commit()
-    print(f"Client-side multiplication completed. Result stored in {C_name}")
+    # print(f"Client-side multiplication completed. Result stored in {C_name}")
+
 
 if __name__ == "__main__":
     try:
 
         # Test with toy example
-        client_side_matmul("A_toy", "B_toy", "C_client_toy")
+        client_side_matmul(get_data("A_toy"), get_data("B_toy"), "C_client_toy")
 
         # Test with random matrices
         generate("rnd", 5, 0.5)  # Generate random 5x6 and 6x5 matrices
-        client_side_matmul("rnd_h", "rnd_v", "rnd_result_client")
+        client_side_matmul(get_data("rnd_h"), get_data("rnd_v"), "rnd_result_client")
 
     except (Exception, psycopg2.Error) as error:
         print("Error:", error)

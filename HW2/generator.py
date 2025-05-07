@@ -29,12 +29,12 @@ def create_table(table_name):
             j INTEGER NOT NULL,
             val INTEGER NOT NULL
         );
-        CREATE INDEX idx_{table_name}_pos ON {table_name}(i, j);
+        -- CREATE INDEX idx_{table_name}_pos ON {table_name}(i, j);
     """
     )
 
 
-def get_mat_size(table_name):
+def get_mat_size(table_name) -> tuple[int, int]:
     cursor.execute(f"SELECT max(i), max(j) FROM {table_name}")
     return cursor.fetchone()
 

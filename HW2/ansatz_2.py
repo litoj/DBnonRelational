@@ -134,6 +134,7 @@ def convert_to_vector(table_name, orientation="row"):
 
 ### Teil 2 ###
 
+
 def create_dotprod_function():
     """Create the UDF for dot product calculation in PostgreSQL"""
     try:
@@ -164,18 +165,6 @@ def create_dotprod_function():
 def vector_matmul(A_name, B_name, C_name):
     """Perform matrix multiplication using vector representation (Example 2.2)"""
     try:
-        # Create result table C (NOT vector)
-        cursor.execute(f"DROP TABLE IF EXISTS {C_name};")
-        cursor.execute(
-            f"""
-            CREATE TABLE {C_name} (
-                i INTEGER NOT NULL,
-                j INTEGER NOT NULL,
-                val INTEGER NOT NULL
-            );
-        """
-        )
-
         # Execute the multiplication query and store results in C
         cursor.execute(
             f"""
@@ -186,17 +175,17 @@ def vector_matmul(A_name, B_name, C_name):
         """
         )
         conn.commit()
-        print(f"Vector-based multiplication completed. Result stored in {C_name}")
+        # print(f"Vector-based multiplication completed. Result stored in {C_name}")
 
     except (Exception, psycopg2.Error) as error:
         print("Error during vector-based multiplication:", error)
         raise
 
 
+create_dotprod_function()
 if __name__ == "__main__":
     try:
         # Setup: Create tables and UDF
-        create_dotprod_function()  
         convert_to_vector("A_toy", "row")
         convert_to_vector("B_toy", "col")
 
