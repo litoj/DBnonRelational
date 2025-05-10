@@ -190,6 +190,7 @@ if __name__ == "__main__":
         convert_to_vector("B_toy", "col")
 
         # Test with toy example
+        create_table("C_toy_vector")
         vector_matmul("A_toy_vector", "B_toy_vector", "C_toy_vector")
 
     except (Exception, psycopg2.Error) as error:

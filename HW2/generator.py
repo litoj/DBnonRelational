@@ -20,6 +20,7 @@ allowed_integer = 2**10
 
 
 def create_table(table_name):
+    conn.commit()
     cursor.execute(f"DROP TABLE IF EXISTS {table_name};")
 
     cursor.execute(
@@ -31,7 +32,7 @@ def create_table(table_name):
         );
         -- CREATE INDEX idx_{table_name}_pos ON {table_name}(i, j);
     """
-    )
+    ) 
 
 
 def get_mat_size(table_name) -> tuple[int, int]:

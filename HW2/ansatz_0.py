@@ -55,10 +55,13 @@ if __name__ == "__main__":
     try:
 
         # Test with toy example
+        create_table("C_client_toy")
+        conn.commit()
         client_side_matmul(get_data("A_toy"), get_data("B_toy"), "C_client_toy")
 
         # Test with random matrices
         generate("rnd", 5, 0.5)  # Generate random 5x6 and 6x5 matrices
+        create_table("rnd_result_client")
         client_side_matmul(get_data("rnd_h"), get_data("rnd_v"), "rnd_result_client")
 
     except (Exception, psycopg2.Error) as error:
