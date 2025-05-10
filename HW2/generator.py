@@ -29,17 +29,32 @@ def create_table(table_name):
             j INTEGER NOT NULL,
             val INTEGER NOT NULL
         );
-        CREATE INDEX idx_{table_name}_pos ON {table_name}(i, j);
+        -- CREATE INDEX idx_{table_name}_pos ON {table_name}(i, j);
     """
     )
 
 
-def get_mat_size(table_name):
+def get_mat_size(table_name) -> tuple[int, int]:
     cursor.execute(f"SELECT max(i), max(j) FROM {table_name}")
     return cursor.fetchone()
 
 
+def sparsity_check(table_name):
+    [width, height] = get_mat_size(table_name)
+    cursor.execute(f"SELECT COUNT(*) FROM {table_name}")
+    value_count = cursor.fetchone()[0]
+
+    return 1 - (value_count / (width * height))
+
+
 def generate_table(table_name, width, height, zeros_ratio):
+    try:
+        rows,cols = get_mat_size(table_name)
+        spars = sparsity_check(table_name)
+        if rows == width and cols == height and abs(spars-zeros_ratio) < zeros_ratio*0.1:
+            return
+    except (Exception, psycopg2.Error) as error:
+        print("Generating new table")
     try:
         create_table(table_name)
 
@@ -52,7 +67,7 @@ def generate_table(table_name, width, height, zeros_ratio):
 
         [max_i, max_j] = get_mat_size(table_name)
         if max_i != width or max_j != height:  # ensure size is preserved
-            query = f"INSERT INTO {table_name} VALUES ({width}, {height}, 0)"
+            query = f"INSERT INTO {table_name} VALUES ({width}, {height}, 1)"
             cursor.execute(query)
 
         conn.commit()
@@ -68,22 +83,8 @@ def generate(base_name="rnd", size=10, sparsity=0.5):
     generate_table(f"{base_name}_v", size, size + 1, sparsity)
 
 
-def sparsity_check(table_name):
-    [width, height] = get_mat_size(table_name)
-    cursor.execute(f"SELECT COUNT(*) FROM {table_name}")
-    value_count = cursor.fetchone()[0]
-
-    cursor.execute(f"SELECT val FROM {table_name} WHERE i={width} AND j={height}")
-    size_anchor_value = cursor.fetchone()
-
-    if size_anchor_value and size_anchor_value[0] == 0:
-        value_count -= 1
-    return 1 - (value_count / (width * height))
-
-
 if __name__ == "__main__":
     # Example usage
     generate("rnd", 5, 0.5)
     print(sparsity_check("rnd_h"))
     print(sparsity_check("rnd_v"))
-
