@@ -17,6 +17,7 @@ def sql_side_matmul(A_name, B_name, C_name):
             ORDER BY A.i, B.j
         """
         )
+        # auslagern
 
         # Create result table
         cursor.execute(f"DROP TABLE IF EXISTS {C_name};")

@@ -53,6 +53,8 @@ def client_side_matmul(A_name, B_name, C_name):
                 sum_val += a_val * b_val
             C[i][j] = sum_val
 
+    # in eigene Methode auslagern
+
     # Store result in database
     create_table(C_name)
     for i in C:

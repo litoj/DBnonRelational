@@ -42,5 +42,7 @@ def matmul_toy():
     conn.commit()
     print("Toy-Beispiel erfolgreich in die Datenbank importiert")
 
+matmul_toy()
+
 cursor.close()
 conn.close()
