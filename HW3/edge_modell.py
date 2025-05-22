@@ -16,6 +16,36 @@ except (Exception, psycopg2.Error) as error:
     raise error
 
 
+def insert_bulk(
+    entries: List[Tuple], table: str, attrNames: List, retAttr: Optional[str] = None
+) -> List:
+    format = f"({",".join("%s"for _ in attrNames)})"
+    insertDef = f"INSERT INTO {table} ({",".join(attrName for attrName in attrNames)})"
+
+    if retAttr:
+        retAttr = f"RETURNING {retAttr}"
+    else:
+        retAttr = ""
+
+    returnList = [None] * len(entries) if retAttr else []
+
+    i = 0
+    for j in range(0, len(entries), CHUNK_SIZE):
+        values_str = ", ".join(
+            cursor.mogrify(format, row).decode("utf-8")
+            for row in entries[j : j + CHUNK_SIZE]
+        )
+
+        cursor.execute(f"{insertDef} VALUES {values_str} {retAttr}")
+
+        if retAttr:
+            for row in cursor.fetchall():
+                returnList[i] = row[0]
+                i += 1
+
+    return returnList
+
+
 class Node:
     def __init__(self, tag: str, text: Optional[str] = None):
         self.tag = tag
@@ -45,45 +75,20 @@ class Node:
 
         return nodes, edges, attrs, node_objs
 
-    def insert_all(self): # perform bulk insertions to slightly improve perf
+    def insert_all(self):  # perform bulk insertions to slightly improve perf
         nodes, edges, attrs, node_objs = self.collect_all()
 
         node_values = [(n.tag, n.text) for n in node_objs]
-        ids = []
-        for i in range(0, len(node_values), CHUNK_SIZE):
-            chunk = node_values[i : i + CHUNK_SIZE]
-            values_str = ", ".join(
-                cursor.mogrify("(%s, %s)", row).decode("utf-8") for row in chunk
-            )
-            cursor.execute(
-                f"INSERT INTO node (tag, content) VALUES {values_str} RETURNING id_node"
-            )
-            ids.extend([row[0] for row in cursor.fetchall()])
+        ids = insert_bulk(node_values, "node", ["tag", "content"], "id_node")
 
         for obj, db_id in zip(node_objs, ids):
             obj.db_id = db_id
 
         edge_values = [(p.db_id, c.db_id) for p, c in edges]
-        for i in range(0, len(edge_values), CHUNK_SIZE):
-            chunk = edge_values[i : i + CHUNK_SIZE]
-            values_str = ", ".join(
-                cursor.mogrify("(%s, %s)", row).decode("utf-8") for row in chunk
-            )
-            cursor.execute(f"INSERT INTO edge (id_from, id_to) VALUES {values_str}")
+        insert_bulk(edge_values, "edge", ["id_from", "id_to"])
 
-        for i in range(0, len(node_objs), CHUNK_SIZE):
-            attr_chunk = []
-            for obj in node_objs[i : i + CHUNK_SIZE]:
-                for k, v in obj.attrib.items():
-                    attr_chunk.append((obj.db_id, k, v))
-            if attr_chunk:
-                values_str = ", ".join(
-                    cursor.mogrify("(%s, %s, %s)", row).decode("utf-8")
-                    for row in attr_chunk
-                )
-                cursor.execute(
-                    f"INSERT INTO attr (id_node, key, value) VALUES {values_str}"
-                )
+        attr_values = [(n.db_id, k, v) for n in node_objs for k, v in n.attrib.items()]
+        insert_bulk(attr_values, "attr", ["id_node", "key", "value"])
 
         conn.commit()
 
