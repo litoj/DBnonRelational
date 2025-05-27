@@ -246,6 +246,30 @@ def get_preceding_siblings(node_id: int) -> List[Tuple[int, str, Optional[str]]]
     return cursor.fetchall()
 
 
+def print_tree_by_edges(nodes: List[Tuple[int, str, Optional[str]]]):
+    node_map: dict[int, Tuple[str, Optional[str]]] = {n[0]: (n[1], n[2]) for n in nodes}
+    cursor.execute("SELECT id_from, id_to FROM edge")
+    edges = cursor.fetchall()
+
+    children_map: dict[int, List[int]] = defaultdict(list)
+    parent_map: dict[int, int] = {}
+    for frm, to in edges:
+        if frm in node_map and to in node_map:
+            children_map[frm].append(to)
+            parent_map[to] = frm
+
+    roots = [n for n in node_map if n not in parent_map]
+
+    def print_subtree(node_id: int, indent: int = 0):
+        tag, content = node_map[node_id]
+        print("  " * indent + f"<{tag}>{' ' + content if content else ''}")
+        for child_id in children_map.get(node_id, []):
+            print_subtree(child_id, indent + 1)
+
+    for r in roots:
+        print_subtree(r)
+
+
 def toy_xpath_examples():
     print("\nAncestors of 'Daniel Ulrich Schmitt':")
     cursor.execute(
@@ -255,10 +279,10 @@ def toy_xpath_examples():
     )
     id = cursor.fetchone()
     if id:
-        print(get_ancestor_nodes(id[0]))
+        print_tree_by_edges(get_ancestor_nodes(id[0]))
 
     print("\nDescendants of VLDB 2023 (id = 2):")
-    print(get_descendant_nodes(2))
+    print_tree_by_edges(get_descendant_nodes(2))
 
     for name in ["SchmittKAMM23", "SchalerHS23"]:
         cursor.execute(
