@@ -1,10 +1,9 @@
-# file: xml_to_edge_model.py
-
 from lxml import etree
 import psycopg2
 from typing import Optional, List, Tuple
+from collections import defaultdict
 
-CHUNK_SIZE = 1000
+CHUNK_SIZE = 1024
 
 try:
     conn = psycopg2.connect(
@@ -14,6 +13,40 @@ try:
 except (Exception, psycopg2.Error) as error:
     print("Error while connecting to PostgreSQL")
     raise error
+
+
+def create_generic_schema():
+    cursor.execute("DROP TABLE IF EXISTS attr")
+    cursor.execute("DROP TABLE IF EXISTS edge")
+    cursor.execute("DROP TABLE IF EXISTS node")
+
+    cursor.execute(
+        """
+        CREATE TABLE node (
+            id_node SERIAL PRIMARY KEY,
+            tag TEXT,
+            content TEXT
+        )
+    """
+    )
+    cursor.execute(
+        """
+        CREATE TABLE edge (
+            id_from INTEGER REFERENCES node(id_node),
+            id_to INTEGER REFERENCES node(id_node)
+        )
+    """
+    )
+    cursor.execute(
+        """
+        CREATE TABLE attr (
+            id_node INTEGER REFERENCES node(id_node),
+            key TEXT,
+            value TEXT
+        )
+    """
+    )
+    conn.commit()
 
 
 def insert_bulk(
@@ -93,6 +126,35 @@ class Node:
         conn.commit()
 
 
+def reorganize_node_structure(flat_root: Node) -> Node:
+    bib_node = Node(tag="bib")
+    venue_map = defaultdict(lambda: defaultdict(list))
+
+    for pub in flat_root.children:
+        key = pub.attrib.get("key", "")
+        key_parts = key.split("/")
+        venue = key_parts[1] if len(key_parts) > 1 else "unknown"
+        year = "unknown"
+        for child in pub.children:
+            if child.tag == "year" and child.text:
+                year = child.text
+                break
+        venue_map[venue][year].append(pub)
+
+    for venue, years in venue_map.items():
+        venue_node = Node(tag="venue")
+        venue_node.attrib["key"] = venue
+        bib_node.add_child(venue_node)
+        for year, pubs in years.items():
+            year_node = Node(tag="year")
+            year_node.attrib["key"] = year
+            venue_node.add_child(year_node)
+            for pub in pubs:
+                year_node.add_child(pub)
+
+    return bib_node
+
+
 def parse_generic_xml(xml_file: str) -> Node:
     root_node = None
     node_stack = []
@@ -109,51 +171,116 @@ def parse_generic_xml(xml_file: str) -> Node:
             if root_node is None:
                 root_node = node
         elif event == "end":
-            node_stack[-1].text = elem.text.strip() if elem.text else None
+            node_stack[-1].text = elem.text.strip() or None
             elem.clear()
             node_stack.pop()
 
     return root_node
 
 
-def create_generic_schema():
-    cursor.execute("DROP TABLE IF EXISTS attr")
-    cursor.execute("DROP TABLE IF EXISTS edge")
-    cursor.execute("DROP TABLE IF EXISTS node")
+def get_ancestor_nodes(node_id: int) -> List[Tuple[int, str, Optional[str]]]:
+    cursor.execute(
+        """
+        WITH RECURSIVE ancestors(id_node, tag, content) AS (
+            SELECT n.id_node, n.tag, n.content
+            FROM node n
+            WHERE n.id_node = %s
+            UNION
+            SELECT n.id_node, n.tag, n.content
+            FROM edge e
+            JOIN ancestors a ON e.id_to = a.id_node
+            JOIN node n ON e.id_from = n.id_node
+        )
+        SELECT id_node, tag, content FROM ancestors WHERE id_node != %s
+    """,
+        (node_id, node_id),
+    )
+    return cursor.fetchall()
 
+
+def get_descendant_nodes(node_id: int) -> List[Tuple[int, str, Optional[str]]]:
     cursor.execute(
         """
-        CREATE TABLE node (
-            id_node SERIAL PRIMARY KEY,
-            tag TEXT,
-            content TEXT
+        WITH RECURSIVE descendants(id_node, tag, content) AS (
+            SELECT n.id_node, n.tag, n.content
+            FROM node n
+            WHERE n.id_node = %s
+            UNION
+            SELECT n.id_node, n.tag, n.content
+            FROM edge e
+            JOIN descendants d ON e.id_from = d.id_node
+            JOIN node n ON e.id_to = n.id_node
         )
-    """
+        SELECT id_node, tag, content FROM descendants WHERE id_node != %s
+    """,
+        (node_id, node_id),
     )
+    return cursor.fetchall()
+
+
+def get_following_siblings(node_id: int) -> List[Tuple[int, str, Optional[str]]]:
     cursor.execute(
         """
-        CREATE TABLE edge (
-            id_from INTEGER REFERENCES node(id_node),
-            id_to INTEGER REFERENCES node(id_node)
-        )
-    """
+        SELECT e1.id_to, n.tag, n.content
+        FROM edge e1
+        JOIN edge e2 ON e1.id_from = e2.id_from
+        JOIN node n ON e1.id_to = n.id_node
+        WHERE e2.id_to = %s AND e1.id_to > e2.id_to
+    """,
+        (node_id,),
     )
+    return cursor.fetchall()
+
+
+def get_preceding_siblings(node_id: int) -> List[Tuple[int, str, Optional[str]]]:
     cursor.execute(
         """
-        CREATE TABLE attr (
-            id_node INTEGER REFERENCES node(id_node),
-            key TEXT,
-            value TEXT
-        )
+        SELECT e1.id_to, n.tag, n.content
+        FROM edge e1
+        JOIN edge e2 ON e1.id_from = e2.id_from
+        JOIN node n ON e1.id_to = n.id_node
+        WHERE e2.id_to = %s AND e1.id_to < e2.id_to
+    """,
+        (node_id,),
+    )
+    return cursor.fetchall()
+
+
+def toy_xpath_examples():
+    print("\nAncestors of 'Daniel Ulrich Schmitt':")
+    cursor.execute(
+        """
+        SELECT id_node FROM node WHERE content = 'Daniel Ulrich Schmitt'
     """
     )
-    conn.commit()
+    id = cursor.fetchone()
+    if id:
+        print(get_ancestor_nodes(id[0]))
+
+    print("\nDescendants of VLDB 2023 (id = 2):")
+    print(get_descendant_nodes(2))
+
+    for name in ["SchmittKAMM23", "SchalerHS23"]:
+        cursor.execute(
+            """SELECT id_node FROM attr WHERE key = "key" and value LIKE %s""",
+            (f"%{name}",),
+        )
+        id = (cursor.fetchone() or [])[0]
+        if id:
+            print(f"\nFollowing siblings of {name}, id={id}:")
+            print(get_following_siblings(id))
+            print(f"\nPreceding siblings of {name}, id={id}:")
+            print(get_preceding_siblings(id))
 
 
 def main():
     create_generic_schema()
     root_node = parse_generic_xml("toy_example.xml")
+    root_node = reorganize_node_structure(root_node)
     root_node.insert_all()
+
+    toy_xpath_examples()
+
     conn.close()
 
 
