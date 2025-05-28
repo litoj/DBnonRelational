@@ -248,6 +248,12 @@ def get_preceding_siblings(node_id: int) -> List[Tuple[int, str, Optional[str]]]
 
 def print_tree_by_edges(nodes: List[Tuple[int, str, Optional[str]]]):
     node_map: dict[int, Tuple[str, Optional[str]]] = {n[0]: (n[1], n[2]) for n in nodes}
+
+    cursor.execute("SELECT id_node, key, value FROM attr")
+    attr_map: dict[int, List[Tuple[str, str]]] = defaultdict(list)
+    for node_id, key, value in cursor.fetchall():
+        attr_map[node_id].append((key, value))
+
     cursor.execute("SELECT id_from, id_to FROM edge")
     edges = cursor.fetchall()
 
@@ -262,7 +268,10 @@ def print_tree_by_edges(nodes: List[Tuple[int, str, Optional[str]]]):
 
     def print_subtree(node_id: int, indent: int = 0):
         tag, content = node_map[node_id]
-        print("  " * indent + f"<{tag}>{' ' + content if content else ''}")
+        attrs = attr_map.get(node_id, [])
+        attr_str = " ".join(f'{k}="{v}"' for k, v in attrs)
+        line = f"<{tag}{' ' + attr_str if attr_str else ''}>{' ' + content if content else ''}"
+        print("  " * indent + line)
         for child_id in children_map.get(node_id, []):
             print_subtree(child_id, indent + 1)
 
@@ -273,9 +282,7 @@ def print_tree_by_edges(nodes: List[Tuple[int, str, Optional[str]]]):
 def toy_xpath_examples():
     print("\nAncestors of 'Daniel Ulrich Schmitt':")
     cursor.execute(
-        """
-        SELECT id_node FROM node WHERE content = 'Daniel Ulrich Schmitt'
-    """
+        """SELECT id_node FROM node WHERE content = 'Daniel Ulrich Schmitt'"""
     )
     id = cursor.fetchone()
     if id:
@@ -302,6 +309,9 @@ def main():
     root_node = parse_generic_xml("toy_example.xml")
     root_node = reorganize_node_structure(root_node)
     root_node.insert_all()
+
+    # verify all data was saved
+    # print_tree_by_edges(get_descendant_nodes(1))
 
     toy_xpath_examples()
 
