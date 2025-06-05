@@ -85,34 +85,31 @@ class Node:
         self.text = text
         self.attrib = {}
         self.children: List["Node"] = []
+        self.parent: Optional["Node"] = None
         self.db_id: Optional[int] = None
 
-    def collect_unsaved(self):
-        nodes = []
-        edges = []
-        attrs = []
-        node_objs = []
-        if not self.db_id:
-            nodes.append((self.tag, self.text))
-            attrs = [(self.tag, k, v) for k, v in self.attrib.items()]
-            node_objs.append(self)
+    def add_child(self, child: "Node"):
+        child.parent = self
+        self.children.append(child)
 
-            for child in self.children:
-                edges.append((self, child))
-                if child.db_id:
-                    continue
-                child_nodes, child_edges, child_attrs, child_objs = (
-                    child.collect_unsaved()
-                )
-                nodes.extend(child_nodes)
-                edges.extend(child_edges)
-                attrs.extend(child_attrs)
-                node_objs.extend(child_objs)
+    def collect_all(self):
+        nodes = [(self.tag, self.text)]
+        edges = []
+        attrs = [(self.tag, k, v) for k, v in self.attrib.items()]
+        node_objs = [self]
+
+        for child in self.children:
+            child_nodes, child_edges, child_attrs, child_objs = child.collect_all()
+            nodes.extend(child_nodes)
+            edges.append((self, child))
+            edges.extend(child_edges)
+            attrs.extend(child_attrs)
+            node_objs.extend(child_objs)
 
         return nodes, edges, attrs, node_objs
 
     def insert_all(self):  # perform bulk insertions to slightly improve perf
-        nodes, edges, attrs, node_objs = self.collect_unsaved()
+        nodes, edges, attrs, node_objs = self.collect_all()
 
         node_values = [(n.tag, n.text) for n in node_objs]
         ids = insert_bulk(node_values, "node", ["tag", "content"], "id_node")
@@ -129,72 +126,55 @@ class Node:
         conn.commit()
 
 
-category_map = {
-    "pvldb": "VLDB",
-    "vldb": "VLDB",
-    "pacmmod": "SIGMOD",
-    "sigmod": "SIGMOD",
-    "icde": "ICDE",
-}
-
-
-def categorize_node(pub: Node) -> tuple[str|None, str]:
-
-    key = pub.attrib.get("key", "")
-    key_parts = key.split("/")
-    venue = category_map.get(key_parts[1],None) if len(key_parts) > 1 else None
-    year = "unknown"
-    for child in pub.children:
-        if child.tag == "year" and child.text:
-            year = child.text
-            break
-    return venue, year
-
-
-def xml_to_db_iterative_2nd_level(xml_file: str) -> Node:
-    parser = etree.iterparse(xml_file, events=("start", "end"), load_dtd=True)
-    event, elem = next(parser)
-    root_node = Node(tag=elem.tag)
-    root_node.attrib = dict(elem.attrib)
-
+def reorganize_node_structure(flat_root: Node) -> Node:
+    bib_node = Node(tag="bib")
     venue_map = defaultdict(lambda: defaultdict(list))
-    stack = []
-    discarded_cnt = 0
 
-    for event, elem in parser:
-        if event == "start":
-            node = Node(tag=elem.tag)
-            node.attrib = dict(elem.attrib)
-            if stack:  # no saving to root node
-                stack[-1].children.append(node)
-            stack.append(node)
-        elif event == "end" and stack:
-            stack[-1].text = elem.text and elem.text.strip() or None
-            elem.clear()
-            node: Node = stack.pop()
-
-            if not stack:  # save publication and clean children for memory savings
-                venue, year = categorize_node(node)
-                if not venue: # ignore unknown categories
-                    discarded_cnt += 1
-                    continue
-
-                venue_map[venue][year].append(node)
-                print(f"Found piece in: v:{venue}, y:{year}")
+    for pub in flat_root.children:
+        key = pub.attrib.get("key", "")
+        key_parts = key.split("/")
+        venue = key_parts[1] if len(key_parts) > 1 else "unknown"
+        year = "unknown"
+        for child in pub.children:
+            if child.tag == "year" and child.text:
+                year = child.text
+                break
+        venue_map[venue][year].append(pub)
 
     for venue, years in venue_map.items():
         venue_node = Node(tag="venue")
         venue_node.attrib["key"] = venue
-        root_node.children.append(venue_node)
+        bib_node.add_child(venue_node)
         for year, pubs in years.items():
             year_node = Node(tag="year")
             year_node.attrib["key"] = year
-            venue_node.children.append(year_node)
+            venue_node.add_child(year_node)
             for pub in pubs:
-                year_node.children.append(pub)
+                year_node.add_child(pub)
 
-    root_node.insert_all()
-    print(f"Filtered out {discarded_cnt} publications of foreign venues.")
+    return bib_node
+
+
+def parse_generic_xml(xml_file: str) -> Node:
+    root_node = None
+    node_stack = []
+
+    for event, elem in etree.iterparse(
+        xml_file, events=("start", "end"), load_dtd=True
+    ):
+        if event == "start":
+            node = Node(tag=elem.tag, text=None)
+            node.attrib = dict(elem.attrib)
+            if node_stack:
+                node_stack[-1].add_child(node)
+            node_stack.append(node)
+            if root_node is None:
+                root_node = node
+        elif event == "end":
+            node_stack[-1].text = elem.text.strip() or None
+            elem.clear()
+            node_stack.pop()
+
     return root_node
 
 
@@ -308,15 +288,12 @@ def toy_xpath_examples():
     if id:
         print_tree_by_edges(get_ancestor_nodes(id[0]))
 
-    print("\nDescendants of VLDB 2023:")
-    cursor.execute("""SELECT id_node FROM attr WHERE key = 'key' and value = 'VLDB'""")
-    id = cursor.fetchone()
-    if id:
-        print_tree_by_edges(get_descendant_nodes(id[0]))
+    print("\nDescendants of VLDB 2023 (id = 2):")
+    print_tree_by_edges(get_descendant_nodes(2))
 
     for name in ["SchmittKAMM23", "SchalerHS23"]:
         cursor.execute(
-            """SELECT id_node FROM attr WHERE key = "key" and value LIKE %s""",
+            """SELECT id_node FROM attr WHERE key = 'key' and value LIKE %s""",
             (f"%{name}",),
         )
         id = (cursor.fetchone() or [])[0]
@@ -329,13 +306,14 @@ def toy_xpath_examples():
 
 def main():
     create_generic_schema()
-    # root_node = xml_to_db_iterative_2nd_level("./toy_example.xml")
-    root_node = xml_to_db_iterative_2nd_level("dblp.xml")
-
-    # toy_xpath_examples()
+    root_node = parse_generic_xml("toy_example.xml")
+    root_node = reorganize_node_structure(root_node)
+    root_node.insert_all()
 
     # verify all data was saved
-    # print_tree_by_edges(get_descendant_nodes(root_node.db_id))
+    # print_tree_by_edges(get_descendant_nodes(1))
+
+    toy_xpath_examples()
 
     conn.close()
 
