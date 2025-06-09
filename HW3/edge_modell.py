@@ -330,7 +330,7 @@ def toy_xpath_examples():
 def main():
     create_generic_schema()
     # root_node = xml_to_db_iterative_2nd_level("./toy_example.xml")
-    root_node = xml_to_db_iterative_2nd_level("dblp.xml")
+    root_node = xml_to_db_iterative_2nd_level("DBnonRelational/HW3/dblp.xml")
 
     # toy_xpath_examples()
 
@@ -340,4 +340,5 @@ def main():
     conn.close()
 
 
-main()
+if __name__ == "__main__":
+    main()
