@@ -138,11 +138,11 @@ category_map = {
 }
 
 
-def categorize_node(pub: Node) -> tuple[str|None, str]:
+def categorize_node(pub: Node) -> tuple[str | None, str]:
 
     key = pub.attrib.get("key", "")
     key_parts = key.split("/")
-    venue = category_map.get(key_parts[1],None) if len(key_parts) > 1 else None
+    venue = category_map.get(key_parts[1], None) if len(key_parts) > 1 else None
     year = "unknown"
     for child in pub.children:
         if child.tag == "year" and child.text:
@@ -175,7 +175,7 @@ def xml_to_db_iterative_2nd_level(xml_file: str) -> Node:
 
             if not stack:  # save publication and clean children for memory savings
                 venue, year = categorize_node(node)
-                if not venue: # ignore unknown categories
+                if not venue:  # ignore unknown categories
                     discarded_cnt += 1
                     continue
 
@@ -327,18 +327,14 @@ def toy_xpath_examples():
             print(get_preceding_siblings(id))
 
 
-def main():
+if __name__ == "__main__":
     create_generic_schema()
-    # root_node = xml_to_db_iterative_2nd_level("./toy_example.xml")
-    root_node = xml_to_db_iterative_2nd_level("DBnonRelational/HW3/dblp.xml")
+    root_node = xml_to_db_iterative_2nd_level("HW3/toy_example.xml")
+    # root_node = xml_to_db_iterative_2nd_level("./dblp.xml")
 
-    # toy_xpath_examples()
+    toy_xpath_examples()
 
     # verify all data was saved
-    # print_tree_by_edges(get_descendant_nodes(root_node.db_id))
+    print_tree_by_edges(get_descendant_nodes(root_node.db_id))
 
     conn.close()
-
-
-if __name__ == "__main__":
-    main()

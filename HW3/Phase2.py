@@ -76,7 +76,7 @@ def populate_accelerator(root_node_id):
     nodes = cursor.fetchall()
     node_ids = [n[0] for n in nodes]
     total_nodes = len(node_ids)
-    
+
     try:
         print("Erfasse alle Knoten...")
         nodes = get_descendant_nodes(root_node_id)
@@ -251,34 +251,35 @@ def test_toy_example():
 
 if __name__ == "__main__":
     # Datenbank initialisieren (falls nicht vorhanden)
-    cursor.execute(
-        """
-        SELECT EXISTS (
-            SELECT FROM information_schema.tables 
-            WHERE table_name = 'node'
-        ) AND EXISTS (
-            SELECT 1 FROM node LIMIT 1
-        )
-    """
-    )
-    if not cursor.fetchone()[0]:
+    try:
+        cursor.execute("SELECT COUNT(*) FROM node")
+        if cursor.fetchone()[0] < 70:
+            raise Exception("Datenbank ist leer, muss befüllt werden")
+        else:
+            print("Datenbank existiert bereits - Überspringe Import")
+    except Exception as e:
+        cursor.execute("ROLLBACK")
         create_generic_schema()
-        root_node = xml_to_db_iterative_2nd_level("DBnonRela    create_generic_schema()tional/HW3/dblp.xml")
-    else:
-        print("Datenbank existiert bereits - Überspringe Import")
-    ###create_accelerator_schema()
+        create_accelerator_schema()
+        root_node = xml_to_db_iterative_2nd_level("./HW3/dblp.xml")
 
-    # Root-Node finden
-    ###cursor.execute("SELECT id_node FROM node")
-    ###root_node_id = cursor.fetchone()[0]
-
-    # Accelerator-Tabellen befüllen
-    ###populate_accelerator(root_node_id)
+    try:
+        cursor.execute("SELECT COUNT(*) FROM accel")
+        if cursor.fetchone()[0] == 0:
+            raise Exception("Accelerator-Tabelle ist leer, muss befüllt werden")
+        else:
+            print("Accellerator schon vorhanden - Überspringe Befüllung")
+    except Exception as e:
+        cursor.execute("ROLLBACK")
+        create_accelerator_schema()
+        cursor.execute("SELECT id_node FROM node")
+        root_node_id = cursor.fetchone()[0]
+        populate_accelerator(root_node_id)
 
     # Teste Accelerator mit dem Toy-Beispiel
     test_toy_example()
-    
+
     # Accelerator testen
-    ###test_accelerator()
+    test_accelerator()
 
     conn.close()
