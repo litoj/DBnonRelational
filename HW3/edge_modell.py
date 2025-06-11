@@ -1,3 +1,4 @@
+from collections.abc import Iterable
 from lxml import etree
 import psycopg2
 from typing import Optional, List, Tuple
@@ -50,10 +51,10 @@ def create_generic_schema():
 
 
 def insert_bulk(
-    entries: List[Tuple], table: str, attrNames: List, retAttr: Optional[str] = None
+    entries: List[Tuple], table: str, colNames: Iterable, retAttr: Optional[str] = None
 ) -> List:
-    format = f"({",".join("%s"for _ in attrNames)})"
-    insertDef = f"INSERT INTO {table} ({",".join(attrName for attrName in attrNames)})"
+    format = f"({",".join("%s"for _ in colNames)})"
+    insertDef = f"INSERT INTO {table} ({",".join(attrName for attrName in colNames)})"
 
     if retAttr:
         retAttr = f"RETURNING {retAttr}"

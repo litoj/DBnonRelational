@@ -2,155 +2,139 @@ from edge_modell import *
 
 
 def create_accelerator_schema():
-    """Erstellt das Schema für den XPath-Accelerator"""
-    cursor.execute("DROP TABLE IF EXISTS accel CASCADE")
-    cursor.execute("DROP TABLE IF EXISTS content CASCADE")
+    print("=== Erstelle Accelerator-Schema ===")
     cursor.execute("DROP TABLE IF EXISTS attribute CASCADE")
+    cursor.execute("DROP TABLE IF EXISTS accel_attr CASCADE")
+    cursor.execute("DROP TABLE IF EXISTS content CASCADE")
+    cursor.execute("DROP TABLE IF EXISTS accel_content CASCADE")
+    cursor.execute("DROP TABLE IF EXISTS accel CASCADE")
 
     cursor.execute(
         """
         CREATE TABLE accel (
-            pre INTEGER PRIMARY KEY,
-            post INTEGER,
+            pre INTEGER NOT NULL,
+            post INTEGER NOT NULL,
             parent INTEGER,
-            kind TEXT,
-            name TEXT
-        )
-    """
-    )
-
-    cursor.execute(
-        """
-        CREATE TABLE content (
-            pre INTEGER REFERENCES accel(pre),
-            text TEXT
-        )
-    """
-    )
-
-    cursor.execute(
-        """
-        CREATE TABLE attribute (
-            pre INTEGER REFERENCES accel(pre),
-            name TEXT,
-            value TEXT
-        )
+            tag TEXT NOT NULL,
+            content TEXT
+        );
+        CREATE TABLE accel_content (
+            pre INTEGER NOT NULL,
+            text TEXT NOT NULL
+        );
+        CREATE TABLE accel_attr (
+            pre INTEGER NOT NULL,
+            key TEXT NOT NULL,
+            value TEXT NOT NULL
+        );
     """
     )
     conn.commit()
 
 
-def calculate_pre_post_orders_iterative(root_node_id):
-    cursor.execute("SELECT id_from, id_to FROM edge")
-    edges = cursor.fetchall()
-    children = defaultdict(list)
-    for frm, to in edges:
-        children[frm].append(to)
+def complete_accellerator_schema():
+    print("=== Vervollständige Accelerator-Schema ===")
+    cursor.execute("ALTER TABLE accel DROP CONSTRAINT IF EXISTS pk_accel_pre")
+    cursor.execute(
+        "ALTER TABLE accel_content DROP CONSTRAINT IF EXISTS fk_accel_content_pre"
+    )
+    cursor.execute("ALTER TABLE accel_attr DROP CONSTRAINT IF EXISTS fk_accel_attr_pre")
 
-    pre_order = {}
-    post_order = {}
-    pre_counter = 0
-    post_counter = 0
-    stack = [(root_node_id, False)]
-
-    while stack:
-        node_id, processed = stack.pop()
-        if processed:
-            post_order[node_id] = post_counter
-            post_counter += 1
-        else:
-            pre_order[node_id] = pre_counter
-            pre_counter += 1
-            stack.append((node_id, True))
-            # Push children in reverse order to process them in order
-            for child in reversed(children.get(node_id, [])):
-                stack.append((child, False))
-    return pre_order, post_order
+    cursor.execute(
+        """
+        ALTER TABLE accel ADD CONSTRAINT pk_accel_pre PRIMARY KEY (pre);
+        ALTER TABLE accel_content ADD CONSTRAINT fk_accel_content_pre
+            FOREIGN KEY (pre) REFERENCES accel(pre) ON DELETE CASCADE;
+        ALTER TABLE accel ADD CONSTRAINT fk_attr_pre
+            FOREIGN KEY (parent) REFERENCES accel(pre) ON DELETE CASCADE;
+        ALTER TABLE accel_attr ADD CONSTRAINT fk_accel_attr_pre
+            FOREIGN KEY (pre) REFERENCES accel(pre) ON DELETE CASCADE;
+    """
+    )
+    conn.commit()
 
 
-def populate_accelerator(root_node_id):
+def populate_accelerator():
+    print("=== Suchen für den Wurzelknoten ===")
+    cursor.execute(
+        """
+        SELECT id_node FROM node WHERE id_node NOT IN (
+            SELECT id_to FROM edge
+        ) LIMIT 1
+    """
+    )
+    root_node_id = cursor.fetchone()[0]
 
-    print("\n=== Starte Population des Accelerators ===")
+    print(f"=== Starte Population des Accelerators von Knoten={root_node_id} ===")
 
-    cursor.execute("SELECT id_node, tag, content FROM node")
+    # retrieve the entire tree, idx=id_node
+    cursor.execute(
+        """
+        SELECT tag, content, COALESCE(child_ids, ARRAY[]::int[]), attrs, values
+        FROM node
+        LEFT JOIN (
+            SELECT
+                id_from AS id_node,
+                array_agg(id_to) AS child_ids
+            FROM edge
+            GROUP BY id_from
+        ) USING (id_node)
+        LEFT JOIN (
+            SELECT
+                id_node,
+                array_agg(key) AS attrs,
+                array_agg(value) AS values
+            FROM attr
+            GROUP BY id_node
+        ) USING (id_node)
+        ORDER BY id_node ASC
+    """
+    )
     nodes = cursor.fetchall()
-    node_ids = [n[0] for n in nodes]
-    total_nodes = len(node_ids)
+    # [0: tag, 1: content, 2: child_ids, 3: attrs, 4: values]
+    print(f"  Gefunden: {len(nodes)} Knoten")
 
-    try:
-        print("Erfasse alle Knoten...")
-        nodes = get_descendant_nodes(root_node_id)
-        node_ids = [n[0] for n in nodes]
-        total_nodes = len(node_ids)
-        print(f"  Gefunden: {total_nodes} Knoten")
+    # update all the nodes with pre and post order numbers
+    print("  Berechne Pre- und Post-Order Werte...")
+    # [0: pre_num, 1: post_num, 2: parent]
+    vectors = [[0, 0, 0] for _ in range(len(nodes))]
 
-        print("Berechne Pre- und Post-Order Werte...")
-        pre_order, post_order = calculate_pre_post_orders_iterative(root_node_id)
+    def update_pre_post_order(idx, pre_num, post_num, parent_pre) -> tuple[int, int]:
+        vector = vectors[idx]
 
-        print("Lade Elternbeziehungen...")
-        cursor.execute("SELECT id_from, id_to FROM edge")
-        edges = cursor.fetchall()
-        parents = {to: frm for frm, to in edges}
+        vector[0] = pre_num
+        node_pre_num = pre_num
+        pre_num += 1
 
-        print("Lade Inhalte aller Knoten...")
-        cursor.execute(
-            "SELECT id_node, content FROM node WHERE id_node = ANY(%s)", (node_ids,)
-        )
-        contents = dict(cursor.fetchall())
+        vector[2] = parent_pre
 
-        print("Lade Attribute aller Knoten...")
-        cursor.execute(
-            "SELECT id_node, key, value FROM attr WHERE id_node = ANY(%s)", (node_ids,)
-        )
-        attr_map = {}
-        for id_node, key, value in cursor.fetchall():
-            attr_map.setdefault(id_node, []).append((key, value))
+        for child_id in nodes[idx][2]:
+            pre_num, post_num = update_pre_post_order(
+                child_id - 1, pre_num, post_num, node_pre_num
+            )
 
-        print("Vorbereiten der Bulk-Daten...")
-        accel_data = []
-        content_data = []
-        attribute_data = []
+        vector[1] = post_num
+        return pre_num, post_num + 1
 
-        for i, node_id in enumerate(node_ids, 1):
-            pre = pre_order[node_id]
-            post = post_order[node_id]
+    update_pre_post_order(root_node_id - 1, 0, 0, None)
 
-            # Fortschritt anzeigen
-            if i % 10000 == 0 or i == total_nodes:
-                print(f"  Fortschritt: {i}/{total_nodes}")
-
-            # Tag laden
-            cursor.execute("SELECT tag FROM node WHERE id_node = %s", (node_id,))
-            tag = cursor.fetchone()[0]
-
-            accel_data.append((pre, post, parents.get(node_id), tag, None))
-
-            content = contents.get(node_id)
-            if content:
-                content_data.append((pre, content))
-
-            for key, value in attr_map.get(node_id, []):
-                attribute_data.append((pre, key, value))
-
-        print("Führe Bulk-Inserts aus...")
-
-        print(f"  Übertrage {len(accel_data)} Zeilen in accel-Tabelle")
-        insert_bulk(accel_data, "accel", ["pre", "post", "parent", "kind", "name"])
-
-        if content_data:
-            print(f"  Übertrage {len(content_data)} Zeilen in content-Tabelle")
-            insert_bulk(content_data, "content", ["pre", "text"])
-
-        if attribute_data:
-            print(f"  Übertrage {len(attribute_data)} Zeilen in attribute-Tabelle")
-            insert_bulk(attribute_data, "attribute", ["pre", "name", "value"])
-
-        conn.commit()
-        print("=== Accelerator erfolgreich befüllt ===")
-
-    except Exception as e:
-        conn.rollback()
-        print("Fehler während der Population:", str(e))
+    # save updated structure to the accel tables
+    print("  Speichere Knoten in Accelerator-Tabellen...")
+    to_save = [
+        (vector[0], vector[1], vector[2], node[0])
+        for node, vector in zip(nodes, vectors)
+    ]
+    insert_bulk(to_save, "accel", ("pre", "post", "parent", "tag"))
+    to_save = [(vector[0], node[1]) for node, vector in zip(nodes, vectors) if node[1]]
+    insert_bulk(to_save, "accel_content", ("pre", "text"))
+    to_save = [
+        (v[0], key, val)
+        for v, n in zip(vectors, nodes)
+        for key, val in zip(n[3] or [], n[4] or [])
+    ]
+    insert_bulk(to_save, "accel_attr", ("pre", "key", "value"))
+    conn.commit()
+    print("=== Accelerator erfolgreich befüllt ===")
 
 
 def test_accelerator():
@@ -160,17 +144,17 @@ def test_accelerator():
     # 1. Ancestor-Achse testen
     cursor.execute(
         """
-        SELECT a.pre FROM accel a JOIN content c ON a.pre = c.pre
-        WHERE a.kind = 'author' AND c.text LIKE 'Daniel%'
+        SELECT a.pre FROM accel a JOIN accel_content c USING (pre)
+        WHERE a.tag = 'author' AND c.text LIKE 'Daniel%'
         LIMIT 1
     """
     )
     author_pre = cursor.fetchone()[0]
+    print(f"Ancestors of author (pre={author_pre}):")
 
-    print("\nAncestors of author (pre=%d):" % author_pre)
     cursor.execute(
         """
-        SELECT a2.pre, a2.kind FROM accel a1, accel a2
+        SELECT a2.pre, a2.tag FROM accel a1, accel a2
         WHERE a1.pre = %s AND a2.pre < a1.pre AND a2.post > a1.post
         ORDER BY a2.pre
     """,
@@ -182,15 +166,15 @@ def test_accelerator():
     # 2. Descendant-Achse testen
     cursor.execute(
         """
-        SELECT pre FROM accel WHERE kind = 'year' LIMIT 1
+        SELECT pre FROM accel WHERE tag = 'year' LIMIT 1
     """
     )
     year_pre = cursor.fetchone()[0]
+    print(f"Descendants of year (pre={year_pre})")
 
-    print("\nDescendants of year (pre=%d):" % year_pre)
     cursor.execute(
         """
-        SELECT a2.pre, a2.kind FROM accel a1, accel a2
+        SELECT a2.pre, a2.tag FROM accel a1, accel a2
         WHERE a1.pre = %s AND a2.pre > a1.pre AND a2.post < a1.post
         ORDER BY a2.pre
     """,
@@ -202,15 +186,15 @@ def test_accelerator():
     # 3. Sibling-Achsen testen
     cursor.execute(
         """
-        SELECT pre FROM accel WHERE kind IN ('article', 'inproceedings') LIMIT 1
+        SELECT pre FROM accel WHERE tag IN ('article', 'inproceedings') LIMIT 1
     """
     )
     article_pre = cursor.fetchone()[0]
+    print(f"Following siblings of article (pre={article_pre})")
 
-    print("\nFollowing siblings of article (pre=%d):" % article_pre)
     cursor.execute(
         """
-        SELECT a2.pre, a2.kind FROM accel a1, accel a2
+        SELECT a2.pre, a2.tag FROM accel a1, accel a2
         WHERE a1.pre = %s AND a2.parent = a1.parent AND a2.pre > a1.pre
         ORDER BY a2.pre
     """,
@@ -219,10 +203,10 @@ def test_accelerator():
     for row in cursor.fetchall():
         print("  ", row)
 
-    print("\nPreceding siblings of article (pre=%d):" % article_pre)
+    print(f"Preceding siblings of article (pre={article_pre})")
     cursor.execute(
         """
-        SELECT a2.pre, a2.kind FROM accel a1, accel a2
+        SELECT a2.pre, a2.tag FROM accel a1, accel a2
         WHERE a1.pre = %s AND a2.parent = a1.parent AND a2.pre < a1.pre
         ORDER BY a2.pre DESC
     """,
@@ -239,7 +223,7 @@ def test_toy_example():
     print(f"\nDescendants of VLDB (pre={vldb_pre}):")
     cursor.execute(
         """
-        SELECT a2.pre, a2.kind FROM accel a1, accel a2
+        SELECT a2.pre, a2.tag FROM accel a1, accel a2
         WHERE a1.pre = %s AND a2.pre > a1.pre AND a2.post < a1.post
         ORDER BY a2.pre
         """,
@@ -258,23 +242,26 @@ if __name__ == "__main__":
         else:
             print("Datenbank existiert bereits - Überspringe Import")
     except Exception as e:
-        cursor.execute("ROLLBACK")
+        conn.rollback()
         create_generic_schema()
         create_accelerator_schema()
         root_node = xml_to_db_iterative_2nd_level("./HW3/dblp.xml")
 
     try:
+        cursor.execute("SELECT COUNT(*) FROM node")
+        node_count = cursor.fetchone()[0]
         cursor.execute("SELECT COUNT(*) FROM accel")
-        if cursor.fetchone()[0] == 0:
-            raise Exception("Accelerator-Tabelle ist leer, muss befüllt werden")
+        accelerator_count = cursor.fetchone()[0]
+
+        if node_count != accelerator_count:
+            raise Exception("Knoten fehlen in Accelerator-Tabelle, muss befüllt werden")
         else:
             print("Accellerator schon vorhanden - Überspringe Befüllung")
     except Exception as e:
-        cursor.execute("ROLLBACK")
+        conn.rollback()
         create_accelerator_schema()
-        cursor.execute("SELECT id_node FROM node")
-        root_node_id = cursor.fetchone()[0]
-        populate_accelerator(root_node_id)
+        populate_accelerator()
+        complete_accellerator_schema()
 
     # Teste Accelerator mit dem Toy-Beispiel
     test_toy_example()
