@@ -54,48 +54,8 @@ def complete_accellerator_schema():
 
 
 def populate_accelerator():
-    print("=== Suchen für den Wurzelknoten ===")
-    cursor.execute(
-        """
-    SELECT id_node FROM node 
-    WHERE id_node IN (
-        SELECT id_from FROM edge 
-        EXCEPT 
-        SELECT id_to FROM edge
-    ) 
-    LIMIT 1
-"""
-    )
-    root_node_id = cursor.fetchone()[0]
-
-    print(f"=== Starte Population des Accelerators von Knoten={root_node_id} ===")
-
-    # retrieve the entire tree, idx=id_node
-    cursor.execute(
-        """
-        SELECT tag, content, COALESCE(child_ids, ARRAY[]::int[]), attrs, values
-        FROM node
-        LEFT JOIN (
-            SELECT
-                id_from AS id_node,
-                array_agg(id_to) AS child_ids
-            FROM edge
-            GROUP BY id_from
-        ) USING (id_node)
-        LEFT JOIN (
-            SELECT
-                id_node,
-                array_agg(key) AS attrs,
-                array_agg(value) AS values
-            FROM attr
-            GROUP BY id_node
-        ) USING (id_node)
-        ORDER BY id_node ASC
-    """
-    )
-    nodes = cursor.fetchall()
     # [0: tag, 1: content, 2: child_ids, 3: attrs, 4: values]
-    print(f"  Gefunden: {len(nodes)} Knoten")
+    root_node_id, nodes = get_edge_model()
 
     # update all the nodes with pre and post order numbers
     print("  Berechne Pre- und Post-Order Werte...")
@@ -219,90 +179,156 @@ def test_accelerator():
         print("  ", row)
 
 
-def get_accelerator_ancestors(node_key: str):
+def find_accel(
+    pre=-1,
+    post=-1,
+    par_pre=-1,
+    tag=None,
+    content=None,
+    attr: str | tuple[str, str] | None = None,
+) -> tuple[int, int, int, str]:
+    conditions = []
+    params = []
+    if pre != -1:
+        conditions.append("pre = %s")
+        params.append(pre)
+    if post != -1:
+        conditions.append("post = %s")
+        params.append(post)
+    if par_pre != -1:
+        conditions.append("parent = %s")
+        params.append(par_pre)
+    if tag:
+        conditions.append("tag = %s")
+        params.append(tag)
+    if content:
+        conditions.append("pre IN (SELECT pre FROM accel_content WHERE text LIKE %s)")
+        params.append(content)
+    if attr:
+        if isinstance(attr, tuple):
+            conditions.append(
+                "pre IN (SELECT pre FROM accel_attr WHERE key = %s AND value LIKE %s)"
+            )
+            params.append(attr[0])
+            params.append(attr[1])
+        else:
+            conditions.append(
+                "pre IN (SELECT pre FROM accel_attr WHERE key = 'key' AND value LIKE %s)"
+            )
+            params.append(attr)
+    if not conditions:
+        raise ValueError("At least one condition must be specified")
+
+    cursor.execute(
+        "SELECT pre, post, parent, tag FROM accel WHERE "
+        + " AND ".join(conditions)
+        + " LIMIT 1",
+        params,
+    )
+    return cursor.fetchone()
+
+
+def get_accel_attrs(pre: int):
     cursor.execute(
         """
-        WITH context AS (
-            SELECT pre, post FROM accel 
-            WHERE pre = (SELECT pre FROM accel_attr WHERE key = 'key' AND value = %s LIMIT 1)
+        SELECT a.tag, c.text, attrs, values
+        FROM accel a, (
+            SELECT
+                array_agg(key) AS attrs,
+                array_agg(value) AS values
+            FROM accel_attr
+            WHERE pre = %s
         )
-        SELECT a.pre, a.tag, c.text
-        FROM accel a, context c
-        WHERE a.pre < c.pre AND a.post > c.post
+        LEFT JOIN accel_content c ON c.pre = %s
+        WHERE a.pre = %s
+        """,
+        (pre, pre, pre),
+    )
+    return cursor.fetchone()
+
+
+def print_xml_accel(pre: int, indent=0):
+    node = get_accel_attrs(pre) or ["error"]
+    indent_str = " " * indent
+    print(f"{indent_str}<{node[0]}", end="")
+    if node[2]:
+        for attr, value in zip(node[2], node[3]):
+            print(f' {attr}="{value}"', end="")
+    print(">", end="")
+    if node[1]:
+        print(node[1], end="")
+    print(f"</{node[0]}>")
+
+
+def get_accel_ancestors(pre: int, post: int):
+    cursor.execute(
+        """
+        SELECT a.pre, a.tag, a.parent, a.tag
+        FROM accel a
+        WHERE a.pre < %s AND a.post > %s
         ORDER BY a.pre
         """,
-        (node_key,),
+        (pre, post),
     )
     return cursor.fetchall()
 
 
-def get_accelerator_descendants(node_key: str):
+def get_accel_descendants(pre: int, post: int):
     cursor.execute(
         """
-        WITH context AS (
-            SELECT pre, post FROM accel 
-            WHERE pre = (SELECT pre FROM accel_attr WHERE key = 'key' AND value = %s LIMIT 1)
-        )
-        SELECT a.pre, a.tag, a.content 
-        FROM accel a, context c
-        WHERE a.pre > c.pre AND a.post < c.post
+        SELECT a.pre, a.tag, a.parent, a.tag
+        FROM accel a
+        WHERE a.pre > %s AND a.post < %s
         ORDER BY a.pre
         """,
-        (node_key,),
+        (pre, post),
     )
     return cursor.fetchall()
 
 
-def get_accelerator_following_siblings(
-    node_key: str,
-):
+def get_accel_following_siblings(pre: int, post: int, parent_pre: int):
     cursor.execute(
         """
-        WITH context AS (
-            SELECT pre, parent FROM accel 
-            WHERE pre = (SELECT pre FROM accel_attr WHERE key = 'key' AND value = %s LIMIT 1)
-        )
-        SELECT a.pre, a.tag, a.content 
-        FROM accel a, context c
-        WHERE a.parent = c.parent AND a.pre > c.pre
+        SELECT a.pre, a.tag, a.parent, a.tag
+        FROM accel a
+        WHERE a.parent = %s AND a.pre > %s
         ORDER BY a.pre
         """,
-        (node_key,),
+        (parent_pre, pre),
     )
     return cursor.fetchall()
 
 
-def get_accelerator_preceding_siblings(
-    node_key: str,
-):
+def get_accel_preceding_siblings(pre: int, post: int, parent_pre: int):
     cursor.execute(
         """
-        WITH context AS (
-            SELECT pre, parent FROM accel 
-            WHERE pre = (SELECT pre FROM accel_attr WHERE key = 'key' AND value = %s LIMIT 1)
-        )
-        SELECT a.pre, a.tag, a.content 
-        FROM accel a, context c
-        WHERE a.parent = c.parent AND a.pre < c.pre
+        SELECT a.pre, a.tag, a.parent, a.tag
+        FROM accel a
+        WHERE a.parent = %s AND a.pre < %s
         ORDER BY a.pre DESC
         """,
-        (node_key,),
+        (parent_pre, pre),
     )
     return cursor.fetchall()
 
 
 def test_toy_example():
-    # 1. Test Ancestors für "Daniel Ulrich Schmitt"
-    ancestors = get_accelerator_ancestors("Daniel Ulrich Schmitt")
-    print(ancestors)
+    print("# 1. Test Ancestors für 'Daniel Ulrich Schmitt'")
+    result = get_accel_ancestors(*find_accel(content="Daniel Ulrich Schmitt")[:2])
+    print(len(result))
+    for n in result:
+        print_xml_accel(n[0], 2)
 
-    # 2. Test Descendants für VLDB 2023
-    descendants = get_accelerator_descendants("vldb_2023")
-    print(descendants)
+    print("# 2. Test Descendants für VLDB 2023")
+    venue = find_accel(attr="VLDB")[0]
+    result = get_accel_descendants(*find_accel(par_pre=venue, attr="2023")[:2])
+    print(len(result))
 
-    # 3. Test Siblings für spezifische Artikel
-    following = get_accelerator_following_siblings("SchmittKAMM23")
-    print(following)
+    print("# 3. Test Siblings für spezifische Artikel")
+    result = get_accel_following_siblings(*find_accel(attr="%SchmittKAMM23")[:3])
+    print(len(result))
+    for n in result:
+        print_xml_accel(n[0], 2)
 
 
 if __name__ == "__main__":
@@ -315,12 +341,13 @@ if __name__ == "__main__":
             print("Datenbank existiert bereits - Überspringe Import")
     except Exception as e:
         conn, cursor = connect()
+        print("=== Dateiimport läuft durch ===")
         create_generic_schema()
-        create_accelerator_schema()
         root_node = xml_to_db_iterative_2nd_level("./HW3/dblp.xml")
+        print("=== Dateiimport fertig ===")
 
     try:
-        cursor.execute("SELECT COUNT(*) FROM nodes")
+        cursor.execute("SELECT COUNT(*) FROM node")
         node_count = cursor.fetchone()[0]
         cursor.execute("SELECT COUNT(*) FROM accel")
         accelerator_count = cursor.fetchone()[0]
@@ -336,7 +363,7 @@ if __name__ == "__main__":
         complete_accellerator_schema()
 
     # Teste Accelerator mit dem Toy-Beispiel
-    #print(get_ancestor_nodes(3))
+    # print(get_ancestor_nodes(3))
     test_toy_example()
 
     # Accelerator testen
