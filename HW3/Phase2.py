@@ -216,21 +216,90 @@ def test_accelerator():
         print("  ", row)
 
 
-def test_toy_example():
-    print("\n=== Teste Accelerator am Toy-Beispiel ===")
-    vldb_pre = 2
-
-    print(f"\nDescendants of VLDB (pre={vldb_pre}):")
+def get_accelerator_ancestors(node_key: str):
     cursor.execute(
         """
-        SELECT a2.pre, a2.tag FROM accel a1, accel a2
-        WHERE a1.pre = %s AND a2.pre > a1.pre AND a2.post < a1.post
-        ORDER BY a2.pre
+        WITH context AS (
+            SELECT pre, post FROM accel 
+            WHERE pre = (SELECT pre FROM accel_attr WHERE key = 'key' AND value = %s LIMIT 1)
+        )
+        SELECT a.pre, a.tag, a.content 
+        FROM accel a, context c
+        WHERE a.pre < c.pre AND a.post > c.post
+        ORDER BY a.pre
         """,
-        (vldb_pre,),
+        (node_key,),
     )
-    for row in cursor.fetchall():
-        print("  ", row)
+    return cursor.fetchall()
+
+
+def get_accelerator_descendants(node_key: str):
+    cursor.execute(
+        """
+        WITH context AS (
+            SELECT pre, post FROM accel 
+            WHERE pre = (SELECT pre FROM accel_attr WHERE key = 'key' AND value = %s LIMIT 1)
+        )
+        SELECT a.pre, a.tag, a.content 
+        FROM accel a, context c
+        WHERE a.pre > c.pre AND a.post < c.post
+        ORDER BY a.pre
+        """,
+        (node_key,),
+    )
+    return cursor.fetchall()
+
+
+def get_accelerator_following_siblings(
+    node_key: str,
+):
+    cursor.execute(
+        """
+        WITH context AS (
+            SELECT pre, parent FROM accel 
+            WHERE pre = (SELECT pre FROM accel_attr WHERE key = 'key' AND value = %s LIMIT 1)
+        )
+        SELECT a.pre, a.tag, a.content 
+        FROM accel a, context c
+        WHERE a.parent = c.parent AND a.pre > c.pre
+        ORDER BY a.pre
+        """,
+        (node_key,),
+    )
+    return cursor.fetchall()
+
+
+def get_accelerator_preceding_siblings(
+    node_key: str,
+):
+    cursor.execute(
+        """
+        WITH context AS (
+            SELECT pre, parent FROM accel 
+            WHERE pre = (SELECT pre FROM accel_attr WHERE key = 'key' AND value = %s LIMIT 1)
+        )
+        SELECT a.pre, a.tag, a.content 
+        FROM accel a, context c
+        WHERE a.parent = c.parent AND a.pre < c.pre
+        ORDER BY a.pre DESC
+        """,
+        (node_key,),
+    )
+    return cursor.fetchall()
+
+
+def test_toy_example():
+    # 1. Test Ancestors für "Daniel Ulrich Schmitt"
+    ancestors = get_accelerator_ancestors("Daniel Ulrich Schmitt")
+    assert len(ancestors) == 3  # article, year, venue
+
+    # 2. Test Descendants für VLDB 2023
+    descendants = get_accelerator_descendants("vldb_2023")
+    assert any(d[1] == "SchmittKAMM23" for d in descendants)
+
+    # 3. Test Siblings für spezifische Artikel
+    following = get_accelerator_following_siblings("SchmittKAMM23")
+    assert following[0][1] == "SchalerHS23"
 
 
 if __name__ == "__main__":
@@ -267,6 +336,6 @@ if __name__ == "__main__":
     test_toy_example()
 
     # Accelerator testen
-    test_accelerator()
+    #test_accelerator()
 
     conn.close()
