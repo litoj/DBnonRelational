@@ -6,14 +6,28 @@ from collections import defaultdict
 
 CHUNK_SIZE = 1024
 
-try:
-    conn = psycopg2.connect(
-        dbname="xmldb", user="postgres", password="", host="localhost", port="5432"
-    )
-    cursor = conn.cursor()
-except (Exception, psycopg2.Error) as error:
-    print("Error while connecting to PostgreSQL")
-    raise error
+
+conn = None
+def connect():
+    global conn, cursor
+    if conn:
+        try:
+            conn.rollback()
+            conn.close()
+        except psycopg2.Error:
+            pass
+    try:
+        conn = psycopg2.connect(
+            dbname="xmldb", user="postgres", password="", host="localhost", port="5432"
+        )
+        cursor = conn.cursor()
+        return conn, cursor
+    except (Exception, psycopg2.Error) as error:
+        print("Error while connecting to PostgreSQL")
+        raise error
+
+
+conn, cursor = connect()
 
 
 def create_generic_schema():
