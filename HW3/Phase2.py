@@ -72,7 +72,9 @@ def populate_accelerator():
 
         vector[2] = parent_pre
 
-        for child_id in nodes[idx][2]:
+        child_ids = nodes[idx][2]
+        child_ids.sort()
+        for child_id in child_ids:
             pre_num, post_num = update_pre_post_order(
                 child_id - 1, pre_num, post_num, node_pre_num
             )
@@ -188,6 +190,7 @@ def find_accel(
     content=None,
     attr: str | tuple[str, str] | None = None,
 ) -> tuple[int, int, int, str]:
+    query = "SELECT pre, post, parent, tag FROM accel WHERE "
     conditions = []
     params = []
     if pre != -1:
@@ -210,8 +213,7 @@ def find_accel(
             conditions.append(
                 "pre IN (SELECT pre FROM accel_attr WHERE key = %s AND value LIKE %s)"
             )
-            params.append(attr[0])
-            params.append(attr[1])
+            params.extend(attr)
         else:
             conditions.append(
                 "pre IN (SELECT pre FROM accel_attr WHERE key = 'key' AND value LIKE %s)"
@@ -221,7 +223,7 @@ def find_accel(
         raise ValueError("At least one condition must be specified")
 
     cursor.execute(
-        "SELECT pre, post, parent, tag FROM accel WHERE "
+        query
         + " AND ".join(conditions)
         + " LIMIT 1",
         params,

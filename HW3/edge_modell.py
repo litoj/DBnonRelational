@@ -306,7 +306,7 @@ def export_tree_to_xml(output_file):
         write_node(root_node_id - 1)
 
 
-def get_ancestor_nodes(node_id: int) -> List[Tuple[int, str, Optional[str]]]:
+def get_node_ancestors(node_id: int) -> List[Tuple[int, str, Optional[str]]]:
     cursor.execute(
         """
         WITH RECURSIVE ancestors(id_node, tag, content) AS (
@@ -326,7 +326,7 @@ def get_ancestor_nodes(node_id: int) -> List[Tuple[int, str, Optional[str]]]:
     return cursor.fetchall()
 
 
-def get_descendant_nodes(node_id: int) -> List[Tuple[int, str, Optional[str]]]:
+def get_node_descendants(node_id: int) -> List[Tuple[int, str, Optional[str]]]:
     cursor.execute(
         """
         WITH RECURSIVE descendants(id_node, tag, content) AS (
@@ -346,7 +346,7 @@ def get_descendant_nodes(node_id: int) -> List[Tuple[int, str, Optional[str]]]:
     return cursor.fetchall()
 
 
-def get_following_siblings(node_id: int) -> List[Tuple[int, str, Optional[str]]]:
+def get_node_following_siblings(node_id: int) -> List[Tuple[int, str, Optional[str]]]:
     cursor.execute(
         """
         SELECT e1.id_to, n.tag, n.content
@@ -360,7 +360,7 @@ def get_following_siblings(node_id: int) -> List[Tuple[int, str, Optional[str]]]
     return cursor.fetchall()
 
 
-def get_preceding_siblings(node_id: int) -> List[Tuple[int, str, Optional[str]]]:
+def get_node_preceding_siblings(node_id: int) -> List[Tuple[int, str, Optional[str]]]:
     cursor.execute(
         """
         SELECT e1.id_to, n.tag, n.content
@@ -407,38 +407,76 @@ def print_tree_by_edges(nodes: List[Tuple[int, str, Optional[str]]]):
         print_subtree(r)
 
 
-def toy_xpath_examples():
-    print("\nAncestors of 'Daniel Ulrich Schmitt':")
+def find_node(
+    id_node=-1,
+    par_id=-1,
+    tag=None,
+    content=None,
+    attr: str | tuple[str, str] | None = None,
+) -> tuple[int, int, int, str]:
+    query = "SELECT id_node, tag FROM node WHERE "
+    conditions = []
+    params = []
+    if id_node != -1:
+        conditions.append("id_node = %s")
+        params.append(id_node)
+    if par_id != -1:
+        conditions.append("id_node IN (SELECT id_to FROM edge WHERE id_from = %s)")
+        params.append(par_id)
+    if tag:
+        conditions.append("tag = %s")
+        params.append(tag)
+    if content:
+        conditions.append("content LIKE %s")
+        params.append(content)
+    if attr:
+        if isinstance(attr, tuple):
+            conditions.append(
+                "id_node IN (SELECT id_node FROM attr WHERE key = %s AND value LIKE %s)"
+            )
+            params.extend(attr)
+        else:
+            conditions.append(
+                "id_node IN (SELECT id_node FROM attr WHERE key = 'key' AND value LIKE %s)"
+            )
+            params.append(attr)
+
+    if not conditions:
+        raise ValueError("At least one condition must be specified")
+
     cursor.execute(
-        """SELECT id_node FROM node WHERE content = 'Daniel Ulrich Schmitt'"""
+        query + " AND ".join(conditions) + " LIMIT 1",
+        params,
     )
-    id = cursor.fetchone()
-    if id:
-        print_tree_by_edges(get_ancestor_nodes(id[0]))
+    return cursor.fetchone()
 
-    print("\nDescendants of VLDB 2023:")
-    cursor.execute("""SELECT id_node FROM attr WHERE key = 'key' and value = 'VLDB'""")
-    id = cursor.fetchone()
-    if id:
-        print_tree_by_edges(get_descendant_nodes(id[0]))
 
-    for name in ["SchmittKAMM23", "SchalerHS23"]:
-        cursor.execute(
-            """SELECT id_node FROM attr WHERE key = "key" and value LIKE %s""",
-            (f"%{name}",),
-        )
-        id = (cursor.fetchone() or [])[0]
-        if id:
-            print(f"\nFollowing siblings of {name}, id={id}:")
-            print(get_following_siblings(id))
-            print(f"\nPreceding siblings of {name}, id={id}:")
-            print(get_preceding_siblings(id))
+def toy_xpath_examples():
+    print("# 1. Test Ancestors für 'Daniel Ulrich Schmitt'")
+    result = get_node_ancestors(find_node(content="Daniel Ulrich Schmitt")[0])
+    print(len(result))
+    print_tree_by_edges(result)
+
+    print("# 2. Test Descendants für VLDB 2023")
+    venue = find_node(attr="VLDB")[0]
+    result = get_node_descendants(find_node(par_id=venue, attr="2023")[0])
+    print(len(result))
+
+    print("# 3. Test Siblings für spezifische Artikel")
+    result = get_node_following_siblings(find_node(attr="%SchmittKAMM23")[0])
+    print(len(result))
 
 
 if __name__ == "__main__":
-    create_generic_schema()
-    root_node = xml_to_db("HW3/toy_example.xml")
-    # root_node = xml_to_db_iterative_2nd_level("./dblp.xml")
+    try:
+        cursor.execute("SELECT COUNT(*) FROM node")
+        if cursor.fetchone()[0]:
+            print("Datenbank existiert bereits - Überspringe Import")
+    except Exception as e:
+        conn, cursor = connect()
+        print("=== Dateiimport läuft durch ===")
+        create_generic_schema()
+        xml_to_db("HW3/toy_example.xml")
 
     toy_xpath_examples()
 
