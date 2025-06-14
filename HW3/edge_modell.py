@@ -168,7 +168,7 @@ def categorize_node(pub: Node) -> tuple[str | None, str]:
     return venue, year
 
 
-def xml_to_db_iterative_2nd_level(xml_file: str) -> Node:
+def xml_to_db(xml_file: str, filter=True) -> Node:
     parser = etree.iterparse(xml_file, events=("start", "end"), load_dtd=True)
     event, elem = next(parser)
     root_node = Node(tag=elem.tag)
@@ -176,13 +176,15 @@ def xml_to_db_iterative_2nd_level(xml_file: str) -> Node:
 
     venue_map = defaultdict(lambda: defaultdict(list))
     stack = []
+    if not filter:  # add children to root node only when not filtering
+        stack.append(root_node)
     discarded_cnt = 0
 
     for event, elem in parser:
         if event == "start":
             node = Node(tag=elem.tag)
             node.attrib = dict(elem.attrib)
-            if stack:  # no saving to root node
+            if stack:
                 stack[-1].children.append(node)
             stack.append(node)
         elif event == "end" and stack:
@@ -197,22 +199,111 @@ def xml_to_db_iterative_2nd_level(xml_file: str) -> Node:
                     continue
 
                 venue_map[venue][year].append(node)
-                print(f"Found piece in: v:{venue}, y:{year}")
+                print(f"Found piece in:v:{venue}, y:{year}")
 
-    for venue, years in venue_map.items():
-        venue_node = Node(tag="venue")
-        venue_node.attrib["key"] = venue
-        root_node.children.append(venue_node)
-        for year, pubs in years.items():
-            year_node = Node(tag="year")
-            year_node.attrib["key"] = year
-            venue_node.children.append(year_node)
-            for pub in pubs:
-                year_node.children.append(pub)
+    if filter:
+        for venue, years in venue_map.items():
+            venue_node = Node(tag="venue")
+            venue_node.attrib["key"] = venue
+            root_node.children.append(venue_node)
+            for year, pubs in years.items():
+                year_node = Node(tag="year")
+                year_node.attrib["key"] = year
+                venue_node.children.append(year_node)
+                for pub in pubs:
+                    year_node.children.append(pub)
+        print(f"Filtered out {discarded_cnt} publications of foreign venues.")
 
     root_node.insert_all()
-    print(f"Filtered out {discarded_cnt} publications of foreign venues.")
     return root_node
+
+
+# root_node_id (id-1 for its index); [0: tag, 1: content, children_ids, attr names, attr values]
+def get_edge_model() -> (
+    tuple[int, list[tuple[str, str, list[int], list[str], list[str]]]]
+):
+    print("=== Erstellung des Edge-Modells im Hauptspeicher ===")
+    print("  Suche Wurzelknoten...")
+    cursor.execute(
+        """
+        SELECT id_node FROM node 
+        WHERE id_node IN (
+            SELECT id_from FROM edge 
+            EXCEPT 
+            SELECT id_to FROM edge
+        ) 
+        LIMIT 1
+    """
+    )
+    root_node_id = cursor.fetchone()[0]
+
+    # retrieve the entire tree, idx=id_node
+    cursor.execute(
+        """
+        SELECT tag, content, COALESCE(child_ids, ARRAY[]::int[]), attrs, values
+        FROM node
+        LEFT JOIN (
+            SELECT
+                id_from AS id_node,
+                array_agg(id_to) AS child_ids
+            FROM edge
+            GROUP BY id_from
+        ) USING (id_node)
+        LEFT JOIN (
+            SELECT
+                id_node,
+                array_agg(key) AS attrs,
+                array_agg(value) AS values
+            FROM attr
+            GROUP BY id_node
+        ) USING (id_node)
+        ORDER BY id_node ASC
+    """
+    )
+    nodes = cursor.fetchall()
+    print(f"  Gefunden: {len(nodes)} Knoten")
+    return root_node_id, nodes
+
+
+def export_tree_to_xml(output_file):
+    # [0: tag, 1: content, 2: child_ids, 3: attrs, 4: values]
+    root_node_id, nodes = get_edge_model()
+    print("=== Speichern des Edge-Modells in XML ===")
+
+    # save updated structure to the file
+    print(f"  Speichere Knoten im '{output_file}'.")
+    with open(output_file, "wb") as f:
+
+        def write(string: str):
+            f.write(string.replace("&", "&amp;").encode("utf-8"))
+
+        write(f'<!DOCTYPE dblp SYSTEM "dblp.dtd">\n')
+
+        def write_node(idx, level=0):
+            # type, content or children, key of attr, values of attr
+            tag, content, child_ids, attrs, values = nodes[idx]
+
+            indent = "  " * level
+            write(f"{indent}<{tag}")
+            if attrs:
+                for attr, value in zip(attrs, values):
+                    write(f' {attr}="{value}"')
+
+            write(">")
+
+            if content:
+                write(content)
+
+            if child_ids:
+                write("\n")
+                child_ids.sort()
+                for child in child_ids:
+                    write_node(child - 1, level + 1)
+                write(indent)
+
+            write(f"</{tag}>\n")
+
+        write_node(root_node_id - 1)
 
 
 def get_ancestor_nodes(node_id: int) -> List[Tuple[int, str, Optional[str]]]:
@@ -316,103 +407,6 @@ def print_tree_by_edges(nodes: List[Tuple[int, str, Optional[str]]]):
         print_subtree(r)
 
 
-# root_node_id (id-1 for its index); [0: tag, 1: content, children_ids, attr names, attr values]
-def get_edge_model() -> (
-    tuple[int, list[tuple[str, str, list[int], list[str], list[str]]]]
-):
-    print("=== Erstellung des Edge-Modells im Hauptspeicher ===")
-    print("  Suche Wurzelknoten...")
-    cursor.execute(
-        """
-        SELECT id_node FROM node 
-        WHERE id_node IN (
-            SELECT id_from FROM edge 
-            EXCEPT 
-            SELECT id_to FROM edge
-        ) 
-        LIMIT 1
-    """
-    )
-    root_node_id = cursor.fetchone()[0]
-
-    # retrieve the entire tree, idx=id_node
-    cursor.execute(
-        """
-        SELECT tag, content, COALESCE(child_ids, ARRAY[]::int[]), attrs, values
-        FROM node
-        LEFT JOIN (
-            SELECT
-                id_from AS id_node,
-                array_agg(id_to) AS child_ids
-            FROM edge
-            GROUP BY id_from
-        ) USING (id_node)
-        LEFT JOIN (
-            SELECT
-                id_node,
-                array_agg(key) AS attrs,
-                array_agg(value) AS values
-            FROM attr
-            GROUP BY id_node
-        ) USING (id_node)
-        ORDER BY id_node ASC
-    """
-    )
-    nodes = cursor.fetchall()
-    print(f"  Gefunden: {len(nodes)} Knoten")
-    return root_node_id, nodes
-
-
-def export_tree_to_xml(output_file):
-    # [0: tag, 1: content, 2: child_ids, 3: attrs, 4: values]
-    root_node_id, nodes = get_edge_model()
-    print("=== Speichern des Edge-Modells in XML ===")
-
-    # construct a tree structure from the nodes
-    print("  Erstelle Baumstruktur...")
-
-    def build_node(
-        idx,
-    ) -> tuple[str, str | List, List, List]:
-        # type, content or children, key of attr, values of attr
-        tag, content, child_ids, attrs, values = nodes[idx]
-
-        if content:
-            if len(child_ids) != 0:
-                raise ValueError(
-                    f"Unexpected node={idx+1} with both content and children.",
-                    nodes[idx],
-                )
-            return (tag, content, attrs or [], values or [])
-
-        children = [build_node(child_id - 1) for child_id in child_ids]
-        return (tag, children, attrs or [], values or [])
-
-    root_node = build_node(root_node_id - 1)
-
-    # save updated structure to the file
-    print(f"  Speichere Knoten im '{output_file}'.")
-    with open(output_file, "wb") as f:
-        f.write(f'<!DOCTYPE dblp SYSTEM "dblp.dtd">\n'.encode("utf-8"))
-
-        def write_node(node, level=0):
-            tag, content_or_children, attrs, values = node
-            indent = "  " * level
-            f.write(f"{indent}<{tag}".encode("utf-8"))
-            if attrs:
-                for attr, value in zip(attrs, values):
-                    f.write(f' {attr}="{value}"'.encode("utf-8"))
-            if isinstance(content_or_children, str):
-                f.write(f">{content_or_children}</{tag}>\n".encode("utf-8"))
-            else:
-                f.write(">\n".encode("utf-8"))
-                for child in content_or_children:
-                    write_node(child, level + 1)
-                f.write(f"{indent}</{tag}>\n".encode("utf-8"))
-
-        write_node(root_node)
-
-
 def toy_xpath_examples():
     print("\nAncestors of 'Daniel Ulrich Schmitt':")
     cursor.execute(
@@ -443,12 +437,9 @@ def toy_xpath_examples():
 
 if __name__ == "__main__":
     create_generic_schema()
-    root_node = xml_to_db_iterative_2nd_level("HW3/toy_example.xml")
+    root_node = xml_to_db("HW3/toy_example.xml")
     # root_node = xml_to_db_iterative_2nd_level("./dblp.xml")
 
     toy_xpath_examples()
-
-    save_path = "HW3/my_small_bib.xml"
-    export_tree_to_xml(save_path)
 
     conn.close()

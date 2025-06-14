@@ -1,4 +1,5 @@
 from edge_modell import *
+import os
 
 
 def create_accelerator_schema():
@@ -327,8 +328,6 @@ def test_toy_example():
     print("# 3. Test Siblings für spezifische Artikel")
     result = get_accel_following_siblings(*find_accel(attr="%SchmittKAMM23")[:3])
     print(len(result))
-    for n in result:
-        print_xml_accel(n[0], 2)
 
 
 if __name__ == "__main__":
@@ -343,8 +342,16 @@ if __name__ == "__main__":
         conn, cursor = connect()
         print("=== Dateiimport läuft durch ===")
         create_generic_schema()
-        root_node = xml_to_db_iterative_2nd_level("./HW3/dblp.xml")
+        exported = "./HW3/my_small_bib.xml"
+        if not os.path.exists(exported):
+            xml_to_db("./HW3/dblp.xml")
+            export_tree_to_xml(exported)
+        else:
+            xml_to_db(exported, filter=False)
+            # export_tree_to_xml("./HW3/identity-check-reexport.xml")
+
         print("=== Dateiimport fertig ===")
+
 
     try:
         cursor.execute("SELECT COUNT(*) FROM node")
