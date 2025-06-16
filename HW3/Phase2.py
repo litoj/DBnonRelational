@@ -76,13 +76,13 @@ def populate_accelerator():
         child_ids.sort()
         for child_id in child_ids:
             pre_num, post_num = update_pre_post_order(
-                child_id - 1, pre_num, post_num, node_pre_num
+                child_id, pre_num, post_num, node_pre_num
             )
 
         vector[1] = post_num
         return pre_num, post_num + 1
 
-    update_pre_post_order(root_node_id - 1, 0, 0, None)
+    update_pre_post_order(root_node_id, 0, 0, None)
 
     # save updated structure to the accel tables
     print("  Speichere Knoten in Accelerator-Tabellen...")

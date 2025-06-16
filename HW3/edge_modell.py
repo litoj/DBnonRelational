@@ -66,18 +66,9 @@ def create_generic_schema():
     conn.commit()
 
 
-def insert_bulk(
-    entries: List[Tuple], table: str, colNames: Iterable, retAttr: Optional[str] = None
-) -> List:
+def insert_bulk(entries: List[Tuple], table: str, colNames: Iterable):
     format = f"({",".join("%s"for _ in colNames)})"
     insertDef = f"INSERT INTO {table} ({",".join(attrName for attrName in colNames)})"
-
-    if retAttr:
-        retAttr = f"RETURNING {retAttr}"
-    else:
-        retAttr = ""
-
-    returnList = [None] * len(entries) if retAttr else []
 
     i = 0
     for j in range(0, len(entries), CHUNK_SIZE):
@@ -86,14 +77,7 @@ def insert_bulk(
             for row in entries[j : j + CHUNK_SIZE]
         )
 
-        cursor.execute(f"{insertDef} VALUES {values_str} {retAttr}")
-
-        if retAttr:
-            for row in cursor.fetchall():
-                returnList[i] = row[0]
-                i += 1
-
-    return returnList
+        cursor.execute(f"{insertDef} VALUES {values_str}")
 
 
 class Node:
@@ -107,40 +91,36 @@ class Node:
     def collect_unsaved(self):
         nodes = []
         edges = []
-        attrs = []
-        node_objs = []
         if not self.db_id:
-            nodes.append((self.tag, self.text))
-            attrs = [(self.tag, k, v) for k, v in self.attrib.items()]
-            node_objs.append(self)
+            nodes.append(self)
 
             for child in self.children:
                 edges.append((self, child))
                 if child.db_id:
                     continue
-                child_nodes, child_edges, child_attrs, child_objs = (
-                    child.collect_unsaved()
-                )
-                nodes.extend(child_nodes)
+                child_objs, child_edges = child.collect_unsaved()
                 edges.extend(child_edges)
-                attrs.extend(child_attrs)
-                node_objs.extend(child_objs)
+                nodes.extend(child_objs)
 
-        return nodes, edges, attrs, node_objs
+        return nodes, edges
 
     def insert_all(self):  # perform bulk insertions to slightly improve perf
-        nodes, edges, attrs, node_objs = self.collect_unsaved()
+        nodes, edges = self.collect_unsaved()
 
-        node_values = [(n.tag, n.text) for n in node_objs]
-        ids = insert_bulk(node_values, "node", ["tag", "content"], "id_node")
+        i = 0
+        for obj in nodes:
+            if obj.db_id != None:
+                raise ValueError("Objects cannot be saved twice")
+            obj.db_id = i
+            i += 1
 
-        for obj, db_id in zip(node_objs, ids):
-            obj.db_id = db_id
+        node_values = [(n.db_id, n.tag, n.text) for n in nodes]
+        insert_bulk(node_values, "node", ["id_node", "tag", "content"])
 
         edge_values = [(p.db_id, c.db_id) for p, c in edges]
         insert_bulk(edge_values, "edge", ["id_from", "id_to"])
 
-        attr_values = [(n.db_id, k, v) for n in node_objs for k, v in n.attrib.items()]
+        attr_values = [(n.db_id, k, v) for n in nodes for k, v in n.attrib.items()]
         insert_bulk(attr_values, "attr", ["id_node", "key", "value"])
 
         conn.commit()
@@ -298,12 +278,12 @@ def export_tree_to_xml(output_file):
                 write("\n")
                 child_ids.sort()
                 for child in child_ids:
-                    write_node(child - 1, level + 1)
+                    write_node(child, level + 1)
                 write(indent)
 
             write(f"</{tag}>\n")
 
-        write_node(root_node_id - 1)
+        write_node(root_node_id)
 
 
 def get_node_ancestors(node_id: int) -> List[Tuple[int, str, Optional[str]]]:
