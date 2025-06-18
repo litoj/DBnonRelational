@@ -286,6 +286,50 @@ def export_tree_to_xml(output_file):
         write_node(root_node_id)
 
 
+def find_node(
+    id_node=-1,
+    par_id=-1,
+    tag=None,
+    content=None,
+    attr: str | tuple[str, str] | None = None,
+) -> tuple[int, int, int, str]:
+    query = "SELECT id_node, tag FROM node WHERE "
+    conditions = []
+    params = []
+    if id_node != -1:
+        conditions.append("id_node = %s")
+        params.append(id_node)
+    if par_id != -1:
+        conditions.append("id_node IN (SELECT id_to FROM edge WHERE id_from = %s)")
+        params.append(par_id)
+    if tag:
+        conditions.append("tag = %s")
+        params.append(tag)
+    if content:
+        conditions.append("content LIKE %s")
+        params.append(content)
+    if attr:
+        if isinstance(attr, tuple):
+            conditions.append(
+                "id_node IN (SELECT id_node FROM attr WHERE key = %s AND value LIKE %s)"
+            )
+            params.extend(attr)
+        else:
+            conditions.append(
+                "id_node IN (SELECT id_node FROM attr WHERE key = 'key' AND value LIKE %s)"
+            )
+            params.append(attr)
+
+    if not conditions:
+        raise ValueError("At least one condition must be specified")
+
+    cursor.execute(
+        query + " AND ".join(conditions) + " LIMIT 1",
+        params,
+    )
+    return cursor.fetchone()
+
+
 def get_node_ancestors(node_id: int) -> List[Tuple[int, str, Optional[str]]]:
     cursor.execute(
         """
@@ -385,50 +429,6 @@ def print_tree_by_edges(nodes: List[Tuple[int, str, Optional[str]]]):
 
     for r in roots:
         print_subtree(r)
-
-
-def find_node(
-    id_node=-1,
-    par_id=-1,
-    tag=None,
-    content=None,
-    attr: str | tuple[str, str] | None = None,
-) -> tuple[int, int, int, str]:
-    query = "SELECT id_node, tag FROM node WHERE "
-    conditions = []
-    params = []
-    if id_node != -1:
-        conditions.append("id_node = %s")
-        params.append(id_node)
-    if par_id != -1:
-        conditions.append("id_node IN (SELECT id_to FROM edge WHERE id_from = %s)")
-        params.append(par_id)
-    if tag:
-        conditions.append("tag = %s")
-        params.append(tag)
-    if content:
-        conditions.append("content LIKE %s")
-        params.append(content)
-    if attr:
-        if isinstance(attr, tuple):
-            conditions.append(
-                "id_node IN (SELECT id_node FROM attr WHERE key = %s AND value LIKE %s)"
-            )
-            params.extend(attr)
-        else:
-            conditions.append(
-                "id_node IN (SELECT id_node FROM attr WHERE key = 'key' AND value LIKE %s)"
-            )
-            params.append(attr)
-
-    if not conditions:
-        raise ValueError("At least one condition must be specified")
-
-    cursor.execute(
-        query + " AND ".join(conditions) + " LIMIT 1",
-        params,
-    )
-    return cursor.fetchone()
 
 
 def toy_xpath_examples():
